@@ -6,8 +6,9 @@
 | Microcontroller | STM32F303RE (Nucleo-64) | 1 |
 | WiFi MCU | ESP32 DevKit V1 | 1 |
 | Display | ILI9488 3.5" TFT SPI | 1 |
-| Signal input | BNC Female Header | 1 |
-| User input | Push button | 2 |
+| Signal input | BNC Female Header | 2 |
+| User input | Momentary pushbutton | 3 |
+| User input | Latching pushbutton | 2 |
 | User input | Rotary encoder | 1 |
-| Signal conditioning | Custom signal adjustment circuit | 1 |
+| Signal conditioning | Custom signal adjustment circuit | 2 |
 | Power | 5V power supply → 3.3V regulator | 1 |
