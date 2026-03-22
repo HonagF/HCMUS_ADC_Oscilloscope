@@ -1,5 +1,5 @@
 [Project Information](https://docs.google.com/document/d/1wfRh9YXK25s_UUH2y_-TGw_fSxXpMR-pIrb6TqXOmT0/edit?tab=t.250vvrg7rc1h)
-## Hardware
+<h2 align="center">Hardware</h2>
 
 | Component | Model | Quantity |
 |---|---|---|
@@ -14,5 +14,9 @@
 | Power | 5V power supply → 3.3V regulator | 1 |
 
 
-![NUCLEO-F303RE_NUCLEO Board](https://github.com/user-attachments/assets/1656fa71-f535-4f75-9b79-cdda9fc12dd3)
-![ESP32_DevKit_V1]<img width="800" height="800" alt="image" src="https://github.com/user-attachments/assets/be0393f5-5c70-4d16-99f6-d63a9f7baf6b" />
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/1656fa71-f535-4f75-9b79-cdda9fc12dd3" alt="NUCLEO-F303RE Board"/>
+</p>
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/be0393f5-5c70-4d16-99f6-d63a9f7baf6b" alt="ESP32_DevKit_V1"/>
+
