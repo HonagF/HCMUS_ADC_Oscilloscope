@@ -1,6 +1,6 @@
 [Project Information](https://docs.google.com/document/d/1wfRh9YXK25s_UUH2y_-TGw_fSxXpMR-pIrb6TqXOmT0/edit?tab=t.250vvrg7rc1h)
-<h2 align="center">Hardware</h2>
-<div align="center">
+**Hardware
+
 | Component | Model | Quantity |
 |---|---|---|
 | Microcontroller | STM32F303RE (Nucleo-64) | 1 |
@@ -13,7 +13,6 @@
 | Signal conditioning | Custom signal adjustment circuit | 2 |
 | Power | 5V power supply → 3.3V regulator | 1 |
 
-</div>
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/1656fa71-f535-4f75-9b79-cdda9fc12dd3" alt="NUCLEO-F303RE Board"/>
