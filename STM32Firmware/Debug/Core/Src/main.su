@@ -9,5 +9,5 @@
 ../Core/Src/main.c:668:6:HAL_ADC_ConvHalfCpltCallback	16	static
 ../Core/Src/main.c:675:6:HAL_ADC_ConvCpltCallback	16	static
 ../Core/Src/main.c:682:6:HAL_SPI_TxCpltCallback	16	static
-../Core/Src/main.c:690:10:Process_Signal	96	static
-../Core/Src/main.c:767:6:Error_Handler	4	static,ignoring_inline_asm
+../Core/Src/main.c:689:10:Process_Signal	112	static
+../Core/Src/main.c:775:6:Error_Handler	4	static,ignoring_inline_asm

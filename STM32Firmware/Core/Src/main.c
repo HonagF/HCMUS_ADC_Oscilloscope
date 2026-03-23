@@ -686,7 +686,6 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
 }
 
 // Hàm DSP xử lý tín hiệu: Tìm Max, Min, RMS, Vavg, Tần số và tính toán điểm Trigger
-// Hàm DSP xử lý tín hiệu: Tìm Max, Min, RMS, Vavg, Tần số và tính toán điểm Trigger
 uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg, float* vrms, float* vamp) {
     uint16_t max = 0, min = 4095;
     uint32_t sum = 0;
@@ -709,54 +708,63 @@ uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg
     *vavg = avg_raw * adc_to_volt;
     *vrms = sqrtf((float)sum_sq / SAMPLES_PER_CH) * adc_to_volt;
 
-    // 3. THUẬT TOÁN AUTO-TRIGGER: Động (Dynamic) theo biên độ sóng thực tế
-    // Thay vì chốt cứng 2048, mình lấy điểm chính giữa của Peak-to-Peak làm mốc cắt.
-    // Như vậy sóng có bị lệch áp DC (Offset) hay biên độ nhỏ xíu thì vẫn bắt được dính chấu!
-    int16_t trigger_level = (max + min) / 2;
+    // 3. TÍNH TẦN SỐ (Bằng State Machine quét từ đầu mảng)
+        int16_t trigger_level = (max + min) / 2;
+        // Độ trễ 5% Vpp. Chống nhiễu nhưng không làm mất sóng.
+        int16_t hysteresis = (max - min) * 5 / 100;
+        if (hysteresis < 15) hysteresis = 15;
+        if (hysteresis > 100) hysteresis = 100;
 
-    // Dynamic Hysteresis: Độ trễ bằng 5% biên độ đỉnh-đỉnh. Sóng càng to thì độ trễ càng lớn để chống nhiễu.
-    int16_t hysteresis = (max - min) * 5 / 100;
+        int first_cross_freq = -1;
+        int last_cross_freq = -1;
+        int period_count = 0;
 
-    // Khống chế an toàn: Không cho Hysteresis quá nhỏ (nhiễu sẽ làm rung sóng)
-    // và không cho quá lớn (làm mất trigger). Khoảng an toàn tự test là 15 -> 100
-    if (hysteresis < 15) hysteresis = 15;
-    if (hysteresis > 100) hysteresis = 100;
+        // Khởi tạo trạng thái ban đầu cho máy đếm tần số
+        uint8_t is_low = (raw_data[0] < trigger_level) ? 1 : 0;
 
-    int first_cross = -1;
-    int second_cross = -1;
-
-    // Tìm điểm cắt đầu tiên (Trigger mốc màn hình)
-    for(int i = 400; i < SAMPLES_PER_CH - 400; i++) {
-        // Vẫn xài thuật toán vượt vùng chết (Hysteresis) như cũ
-        if(raw_data[i-2] < (trigger_level - hysteresis) && raw_data[i] > (trigger_level + hysteresis)) {
-            first_cross = i;
-            break;
-        }
-    }
-
-    // Đi tìm điểm sườn lên thứ hai nhằm tính chu kỳ
-    if (first_cross != -1) {
-        for(int i = first_cross + 15; i < SAMPLES_PER_CH - 2; i++) {
-            if(raw_data[i-2] < (trigger_level - hysteresis) && raw_data[i] > (trigger_level + hysteresis)) {
-                second_cross = i;
-                break;
+        for(int i = 0; i < SAMPLES_PER_CH; i++) {
+            // Nếu sóng vượt vạch trên -> Ghi nhận sườn lên
+            if(is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
+                if (first_cross_freq == -1) {
+                    first_cross_freq = i;
+                } else {
+                    last_cross_freq = i;
+                    period_count++;
+                }
+                is_low = 0; // Khóa lại, chờ sóng xuống
+            }
+            // Nếu sóng rớt xuống vạch dưới -> Mở khóa chờ sườn lên tiếp theo
+            else if(is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
+                is_low = 1;
             }
         }
-    }
 
-    // 4. TÍNH TẦN SỐ DỰA TRÊN CHU KỲ LẤY MẪU
-    if(first_cross != -1 && second_cross != -1) {
-        *freq = 100000.0f / (float)(second_cross - first_cross);
-    } else {
-        *freq = 0;
-    }
+        // 4. TÍNH TOÁN TẦN SỐ
+        if(period_count > 0) {
+            *freq = (100000.0f * period_count) / (float)(last_cross_freq - first_cross_freq);
+        } else {
+            *freq = 0;
+        }
 
-    // 5. Trả về vị trí Trigger
-    if (first_cross != -1) {
-        return (uint16_t)first_cross;
-    } else {
-        return 400;
-    }
+        // 5. TÌM ĐIỂM NEO VẼ SÓNG (TRIGGER) CŨNG BẰNG STATE MACHINE
+        int display_trigger = 400; // Mặc định ở mẫu 400 để dành chỗ cho dịch trục X
+
+        // Đánh giá trạng thái sóng ngay tại vị trí 400
+        uint8_t trig_is_low = (raw_data[400] < trigger_level) ? 1 : 0;
+
+        for(int i = 400; i < SAMPLES_PER_CH; i++) {
+            // Chỉ cần sóng trườn qua vạch trên là chốt điểm neo, bất kể dốc thoai thoải cỡ nào
+            if(trig_is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
+                display_trigger = i; // Đã tìm thấy điểm Trigger!
+                break;               // Cắt vòng lặp ngay, lấy điểm đầu tiên làm mốc
+            }
+            else if(trig_is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
+                trig_is_low = 1;     // Sóng xuống thấp, mở khóa chờ cắt lên
+            }
+        }
+
+        return (uint16_t)display_trigger;
+
 }
 /* USER CODE END 4 */
 
@@ -777,7 +785,7 @@ void Error_Handler(void)
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  * where the assert_param error has occurred.
+  *         where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None
