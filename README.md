@@ -20,3 +20,6 @@
 <p align="center">
   <img src="https://github.com/user-attachments/assets/be0393f5-5c70-4d16-99f6-d63a9f7baf6b" alt="ESP32_DevKit_V1" width="50%"/>
 </p>
+<p align="center">
+<img width="545" height="623" alt="image" src="https://github.com/user-attachments/assets/acbb66e7-9d85-4aab-922c-0dc54f587f72" alt="Signal_adjustment_circuit" />
+</p>
