@@ -52,16 +52,15 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-// Mình set số lượng mẫu thu thập cho mỗi khung hình là 1024 mẫu/kênh để đảm bảo đủ dữ liệu hiển thị và dịch trục X.
+// Set số lượng mẫu thu thập cho mỗi khung hình là 1024 mẫu/kênh
 #define SAMPLES_PER_CH    1024
 // Tổng số mẫu DMA cần lấy = Kênh 1 + Kênh 2
 #define TOTAL_SAMPLES	(SAMPLES_PER_CH * 2)
 
 // Khai báo struct đóng gói dữ liệu truyền qua SPI.
-// BẮT BUỘC dùng __attribute__((packed)) để vô hiệu hóa tính năng tự động đệm (padding) của GCC.
-// Nếu không có lệnh này, kích thước struct sẽ bị sai lệch, ESP32 nhận dữ liệu sẽ bị "rác".
+// dùng __attribute__((packed)) để vô hiệu hóa tính năng tự động đệm (padding) của GCC.
 typedef struct __attribute__((packed)){
-	uint8_t header[2]; // Byte đồng bộ đầu khung: 0xAA, 0xBB để ESP32 nhận diện điểm bắt đầu gói tin
+	uint8_t header[2]; // Byte header: 0xAA, 0xBB để ESP32 nhận diện điểm bắt đầu gói tin
 	uint16_t ch1[SAMPLES_PER_CH]; // Dữ liệu thô ADC Kênh 1 (1024 mẫu * 2 byte = 2048 bytes)
 	uint16_t ch2[SAMPLES_PER_CH]; // Dữ liệu thô ADC Kênh 2 (1024 mẫu * 2 byte = 2048 bytes)
 	uint8_t padding[2]; // 2 byte padding thủ công để chống lỗi Hardfault do Misaligned memory access trên vi điều khiển ARM
@@ -79,6 +78,8 @@ typedef struct __attribute__((packed)){
 	uint8_t ch_mode;   // Cờ bitmask chọn kênh hiển thị (1: CH1, 2: CH2, 3: Bật cả 2 kênh)
 	float y_scale1;    // Hệ số phóng to/thu nhỏ trục Y của CH1 (điều khiển bởi Encoder 1)
 	float y_scale2;    // Hệ số phóng to/thu nhỏ trục Y của CH2 (điều khiển bởi Encoder 1)
+	float x_scale1;	   // Hệ số thu phóng trục X của CH1
+	float x_scale2;    // Hệ số thu phóng trục Y của CH2
 	int16_t y_offset1; // Số pixel dịch chuyển sóng lên/xuống của CH1
 	int16_t y_offset2; // Số pixel dịch chuyển sóng lên/xuống của CH2
 
@@ -86,13 +87,13 @@ typedef struct __attribute__((packed)){
 	uint8_t offset_axis; // Trạng thái của nút nhấn: 0 đang chọn chỉnh Y, 1 đang chọn chỉnh X
 	int16_t x_offset1; // Số pixel dịch chuyển trục thời gian (X) cho CH1
 	int16_t x_offset2; // Số pixel dịch chuyển trục thời gian (X) cho CH2
-	uint8_t reset_flag; // Cờ báo hiệu cho ESP32 biết người dùng vừa nhấn nút Autoset (để ESP32 xóa vết sóng cũ trên màn)
+	uint8_t reset_flag; // Cờ reset
 
-	uint8_t footer[2]; // Byte kết thúc khung: 0xCC, 0xDD
+	uint8_t footer[2]; // Byte footer: 0xCC, 0xDD
 } Packet_t;
 
-Packet_t tx_packet; // Khởi tạo biến toàn cục chứa gói tin truyền
-#define PACKET_SIZE sizeof(Packet_t) // Macro tự động tính kích thước Struct để nhét vào hàm DMA
+Packet_t tx_packet; // Khởi tạo biến toàn cục chứa gói tin
+#define PACKET_SIZE sizeof(Packet_t)
 
 // Mảng đệm Ping-Pong cho ADC DMA. Kích thước = Số mẫu * 2 kênh * 2 (Ping và Pong). Tổng = 4096 phần tử.
 // Sử dụng Ping-Pong buffer giúp CPU có thể xử lý nửa mảng này trong khi phần cứng DMA đang tự động điền dữ liệu vào nửa mảng kia, đảm bảo Real-time.
@@ -109,7 +110,7 @@ static void MX_TIM3_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
-// Hàm xử lý tín hiệu DSP (Digital Signal Processing): Tìm Trigger, tính Vrms, Vpp, Freq
+// Hàm xử lý tín hiệu: Tìm Trigger, tính Vrms, Vpp, Freq
 uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg, float* vrms, float* vamp);
 /* USER CODE END PFP */
 
@@ -165,7 +166,7 @@ int main(void)
   // Calib ADC để loại bỏ sai số nội vi trước khi chạy thực tế
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
-  // Kích hoạt bộ chuyển đổi ADC chạy ở chế độ DMA Circular (Quay vòng tự động đổ vào mảng adc_buffer)
+  // Kích hoạt bộ chuyển đổi ADC chạy ở chế độ DMA Circular
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, TOTAL_SAMPLES * 2);
 
   // Khởi động Timer 3. Timer 3 được cấu hình làm TRGO (Trigger Output) tạo xung đập nhịp 100kHz để kích ADC lấy mẫu.
@@ -176,13 +177,15 @@ int main(void)
   uint32_t last_btn_tick = 0;
   tx_packet.y_scale1 = 1.0f;
   tx_packet.y_scale2 = 1.0f;
+  tx_packet.x_scale1 = 1.0f;
+  tx_packet.x_scale2 = 1.0f;
   tx_packet.y_offset1 = 0;
   tx_packet.y_offset2 = 0;
   tx_packet.offset_axis = 0;
   tx_packet.x_offset1 = 0;
   tx_packet.x_offset2 = 0;
 
-  // Biến lưu trạng thái của 2 chân CLK Encoder để so sánh cạnh xuống (Falling Edge)
+  // Biến lưu trạng thái của 2 chân CLK Encoder để so sánh cạnh xuống
   uint8_t last_clk1 = 1;
   uint8_t last_clk2 = 1;
   /* USER CODE END 2 */
@@ -194,20 +197,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  // Khởi tạo 2 biến dùng để chống dội phím (Debounce) bằng phần mềm cho Encoder
+	  // Khởi tạo 2 biến dùng để chống dội phím (Debounce) cho Encoder
 	  uint32_t last_enc1_tick = 0;
 	  uint32_t last_enc2_tick = 0;
-	  uint32_t current_tick = HAL_GetTick(); // Lấy thời gian ms hiện tại của hệ thống (sử dụng SysTick)
+	  uint32_t current_tick = HAL_GetTick(); // Lấy thời gian ms hiện tại của hệ thống
 
 	  //--- 1. ĐỌC CÔNG TẮC CHỌN KÊNH ---
-	  // Kiểm tra chân PC4 và PC5. Do mắc Pull-up nên khi công tắc đóng mạch với GND, tín hiệu sẽ là mức Thấp (RESET).
+	  // Kiểm tra chân PC4 và PC5
 	  uint8_t ch1_en = (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_4) == GPIO_PIN_RESET) ? 1:0;
 	  uint8_t ch2_en = (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_5) == GPIO_PIN_RESET) ? 2:0;
 	  // Dùng phép toán OR Bitmask để gộp chung cờ hiển thị (1: bật CH1, 2: bật CH2, 3: bật cả 2)
 	  tx_packet.ch_mode = ch1_en | ch2_en;
 
 	  //--- 2. ĐỌC NÚT NHẤN (Có Debounce 200ms) ---
-	  // Giải thuật chống rung phần mềm: Chỉ chấp nhận lần bấm tiếp theo nếu khoảng cách giữa 2 lần bấm cách nhau > 200ms.
+	  // Giải thuật chống rung: Chỉ chấp nhận lần bấm tiếp theo nếu khoảng cách giữa 2 lần bấm cách nhau > 200ms.
 	  if(current_tick - last_btn_tick > 200){
 
 		  // Nút Dừng hình / Chạy tiếp (Hold)
@@ -218,6 +221,8 @@ int main(void)
 		  }
 		  // Nút Autoset (Trả mọi thông số về default)
 		  else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) == GPIO_PIN_RESET){
+			  tx_packet.x_scale1 = 1.0f;
+			  tx_packet.x_scale2 = 1.0f;
 			  tx_packet.y_scale1 = 1.0f; // Trả hệ số zoom trục Y về 1x
 			  tx_packet.y_scale2 = 1.0f;
 			  tx_packet.y_offset1 = 0;   // Trả vị trí gốc Y về giữa màn hình
@@ -225,7 +230,7 @@ int main(void)
 			  tx_packet.x_offset1 = 0;   // Trả gốc thời gian X về ban đầu
 			  tx_packet.x_offset2 = 0;
 			  tx_packet.offset_axis = 0;
-			  tx_packet.reset_flag = 1;  // Bật cờ để ra lệnh cho ESP32 clear sạch màn hình
+			  tx_packet.reset_flag = 1;  // Bật cờ để ra lệnh cho ESP32 clear màn hình
 			  last_btn_tick = current_tick;
 		  }
 		  // Nút Chuyển chế độ điều khiển trục (X hoặc Y)
@@ -237,7 +242,6 @@ int main(void)
 
 	  //--- 3. ĐỌC ROTARY ENCODER ---
 	  // Sử dụng giải thuật State Machine cơ bản quét sườn xuống của chân CLK, sau đó đọc chân DT để biết chiều quay.
-
 	  // ENCODER 1: Dùng để phóng to/thu nhỏ sóng (Scale Y)
 	  uint8_t clk1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
 	  // Phát hiện cạnh xuống (clk1 hiện tại = 0, clk1 trước đó = 1)
@@ -246,19 +250,30 @@ int main(void)
 	        if (current_tick - last_enc1_tick > 5) {
 	  		  // Nếu chân DT khác mức logic của CLK -> Quay cùng chiều kim đồng hồ (Tăng). Ngược lại là giảm.
 	  		  float delta = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1) != clk1) ? 0.2f : -0.2f;
-
-	  		  if(ch1_en) {
-	  			  tx_packet.y_scale1 += delta;
-	  			  // Ép biên độ zoom trong khoảng an toàn (0.2x đến 5.0x)
-	  			  if (tx_packet.y_scale1 < 0.2f) tx_packet.y_scale1 = 0.2f;
-	  			  if (tx_packet.y_scale1 > 5.0f) tx_packet.y_scale1 = 5.0f;
+	  		  if (tx_packet.offset_axis == 0){
+	  			 if (ch1_en) {
+	  				 tx_packet.y_scale1 += delta;
+	  				 if (tx_packet.y_scale1 < 0.2f) tx_packet.y_scale1 = 0.2f;
+	  				 if (tx_packet.y_scale1 > 5.0f) tx_packet.y_scale1 = 5.0f;
+	  			 }
+	  			 if (ch2_en) {
+	  				tx_packet.y_scale2 += delta;
+	  				if (tx_packet.y_scale2 < 0.2f) tx_packet.y_scale2 = 0.2f;
+	  				if (tx_packet.y_scale2 > 5.0f) tx_packet.y_scale2 = 5.0f;
+	  			 }
+	  		  } else {
+	  			if (ch1_en) {
+	  				tx_packet.x_scale1 += delta;
+	  				if (tx_packet.x_scale1 < 0.8f) tx_packet.x_scale1 = 0.8f;
+	  				if (tx_packet.x_scale1 > 5.0f) tx_packet.x_scale1 = 5.0f;
+	  			}
+	  			if (ch2_en) {
+	  				tx_packet.x_scale2 += delta;
+	  				if (tx_packet.x_scale2 < 0.8f) tx_packet.x_scale2 = 0.8f;
+	  				if (tx_packet.x_scale2 > 5.0f) tx_packet.x_scale2 = 5.0f;
+	  			}
 	  		  }
-	  		  if(ch2_en) {
-	  			  tx_packet.y_scale2 += delta;
-	  			  if (tx_packet.y_scale2 < 0.2f) tx_packet.y_scale2 = 0.2f;
-	  			  if (tx_packet.y_scale2 > 5.0f) tx_packet.y_scale2 = 5.0f;
-	  		  }
-	          last_enc1_tick = current_tick;
+	  		  last_enc1_tick = current_tick;
 	        }
 	  }
 	  last_clk1 = clk1;
@@ -337,9 +352,6 @@ int main(void)
     	      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); // Kéo chân CS xuống LOW để chọn chip Slave (ESP32)
     	      // Sử dụng DMA để đẩy gói tin ~2KB đi. CPU không phải chờ truyền xong.
     	      HAL_SPI_Transmit_DMA(&hspi1, (uint8_t*)&tx_packet, PACKET_SIZE);
-
-    	      // Giải thuật "Xóa cờ Auto-Clear": Sau khi nạp lệnh truyền gói tin (có chứa cờ reset=1) vào luồng DMA,
-    	      // ta ngay lập tức dập cờ reset về 0 ở chu kỳ kế tiếp. Tránh việc ESP32 nhận được reset liên tục và xóa màn hình liên tục.
     	      tx_packet.reset_flag = 0;
     	  }
       }
@@ -385,10 +397,8 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_ADC12
-                              |RCC_PERIPHCLK_TIM34;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_TIM34;
   PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
-  PeriphClkInit.Adc12ClockSelection = RCC_ADC12PLLCLK_DIV1;
   PeriphClkInit.Tim34ClockSelection = RCC_TIM34CLK_HCLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
@@ -418,7 +428,7 @@ static void MX_ADC1_Init(void)
   /** Common config
   */
   hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV1;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
@@ -449,7 +459,7 @@ static void MX_ADC1_Init(void)
   sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
-  sConfig.SamplingTime = ADC_SAMPLETIME_61CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_19CYCLES_5;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
@@ -461,6 +471,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_2;
   sConfig.Rank = ADC_REGULAR_RANK_2;
+  sConfig.SamplingTime = ADC_SAMPLETIME_19CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -686,7 +697,6 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
 }
 
 // Hàm DSP xử lý tín hiệu: Tìm Max, Min, RMS, Vavg, Tần số và tính toán điểm Trigger
-// Hàm DSP xử lý tín hiệu: Tìm Max, Min, RMS, Vavg, Tần số và tính toán điểm Trigger
 uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg, float* vrms, float* vamp) {
     uint16_t max = 0, min = 4095;
     uint32_t sum = 0;
@@ -709,54 +719,62 @@ uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg
     *vavg = avg_raw * adc_to_volt;
     *vrms = sqrtf((float)sum_sq / SAMPLES_PER_CH) * adc_to_volt;
 
-    // 3. THUẬT TOÁN AUTO-TRIGGER: Động (Dynamic) theo biên độ sóng thực tế
-    // Thay vì chốt cứng 2048, mình lấy điểm chính giữa của Peak-to-Peak làm mốc cắt.
-    // Như vậy sóng có bị lệch áp DC (Offset) hay biên độ nhỏ xíu thì vẫn bắt được dính chấu!
-    int16_t trigger_level = (max + min) / 2;
+    // 3. TÍNH TẦN SỐ (Bằng State Machine quét từ đầu mảng)
+        int16_t trigger_level = (max + min) / 2;
+        // Độ trễ 5% Vpp. Chống nhiễu nhưng không làm mất sóng.
+        int16_t hysteresis = (max - min) * 5 / 100;
+        if (hysteresis < 15) hysteresis = 15;
+        if (hysteresis > 100) hysteresis = 100;
 
-    // Dynamic Hysteresis: Độ trễ bằng 5% biên độ đỉnh-đỉnh. Sóng càng to thì độ trễ càng lớn để chống nhiễu.
-    int16_t hysteresis = (max - min) * 5 / 100;
+        int first_cross_freq = -1;
+        int last_cross_freq = -1;
+        int period_count = 0;
 
-    // Khống chế an toàn: Không cho Hysteresis quá nhỏ (nhiễu sẽ làm rung sóng)
-    // và không cho quá lớn (làm mất trigger). Khoảng an toàn tự test là 15 -> 100
-    if (hysteresis < 15) hysteresis = 15;
-    if (hysteresis > 100) hysteresis = 100;
+        // Khởi tạo trạng thái ban đầu cho máy đếm tần số
+        uint8_t is_low = (raw_data[0] < trigger_level) ? 1 : 0;
 
-    int first_cross = -1;
-    int second_cross = -1;
-
-    // Tìm điểm cắt đầu tiên (Trigger mốc màn hình)
-    for(int i = 400; i < SAMPLES_PER_CH - 400; i++) {
-        // Vẫn xài thuật toán vượt vùng chết (Hysteresis) như cũ
-        if(raw_data[i-2] < (trigger_level - hysteresis) && raw_data[i] > (trigger_level + hysteresis)) {
-            first_cross = i;
-            break;
-        }
-    }
-
-    // Đi tìm điểm sườn lên thứ hai nhằm tính chu kỳ
-    if (first_cross != -1) {
-        for(int i = first_cross + 15; i < SAMPLES_PER_CH - 2; i++) {
-            if(raw_data[i-2] < (trigger_level - hysteresis) && raw_data[i] > (trigger_level + hysteresis)) {
-                second_cross = i;
-                break;
+        for(int i = 0; i < SAMPLES_PER_CH; i++) {
+            // Nếu sóng vượt vạch trên -> Ghi nhận sườn lên
+            if(is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
+                if (first_cross_freq == -1) {
+                    first_cross_freq = i;
+                } else {
+                    last_cross_freq = i;
+                    period_count++;
+                }
+                is_low = 0; // Khóa lại, chờ sóng xuống
+            }
+            // Nếu sóng rớt xuống vạch dưới -> Mở khóa chờ sườn lên tiếp theo
+            else if(is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
+                is_low = 1;
             }
         }
-    }
 
-    // 4. TÍNH TẦN SỐ DỰA TRÊN CHU KỲ LẤY MẪU
-    if(first_cross != -1 && second_cross != -1) {
-        *freq = 100000.0f / (float)(second_cross - first_cross);
-    } else {
-        *freq = 0;
-    }
+        // 4. TÍNH TOÁN TẦN SỐ
+        if(period_count > 0) {
+            *freq = (100000.0f * period_count) / (float)(last_cross_freq - first_cross_freq);
+        } else {
+            *freq = 0;
+        }
 
-    // 5. Trả về vị trí Trigger
-    if (first_cross != -1) {
-        return (uint16_t)first_cross;
-    } else {
-        return 400;
-    }
+        // 5. TÌM ĐIỂM NEO VẼ SÓNG (TRIGGER) CŨNG BẰNG STATE MACHINE
+        int display_trigger = 400; // Mặc định ở mẫu 400 để dành chỗ cho dịch trục X
+
+        // Đánh giá trạng thái sóng ngay tại vị trí 400
+        uint8_t trig_is_low = (raw_data[400] < trigger_level) ? 1 : 0;
+
+        for(int i = 400; i < SAMPLES_PER_CH; i++) {
+            // Chỉ cần sóng trườn qua vạch trên là chốt điểm neo, bất kể dốc thoai thoải cỡ nào
+            if(trig_is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
+                display_trigger = i; // Đã tìm thấy điểm Trigger!
+                break;               // Cắt vòng lặp ngay, lấy điểm đầu tiên làm mốc
+            }
+            else if(trig_is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
+                trig_is_low = 1;     // Sóng xuống thấp, mở khóa chờ cắt lên
+            }
+        }
+
+        return (uint16_t)display_trigger;
 }
 /* USER CODE END 4 */
 
@@ -777,7 +795,7 @@ void Error_Handler(void)
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  * where the assert_param error has occurred.
+  *         where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None
