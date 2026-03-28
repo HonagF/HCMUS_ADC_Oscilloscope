@@ -47,7 +47,7 @@ flowchart TB
     end
 
     subgraph PWR ["Power supply"]
-        P["5V input → 3.3V regulator\nSTM32 · ESP32 · ILI9488"]
+        P["4.2V input → 7V boost converter\nSTM32 · ESP32 · ILI9488"]
     end
 
     B      -->|"ADC input"| C
@@ -75,4 +75,4 @@ flowchart TB
 | STM32F303RE → ESP32 | SPI (master → slave) | → |
 | ESP32 → ILI9488 | SPI | → |
 | Button / Encoder → STM32F303RE | GPIO / interrupt | → |
-| Power supply → All | 3.3V regulated | → |
+| Power supply → All | 7V boosted | → |
