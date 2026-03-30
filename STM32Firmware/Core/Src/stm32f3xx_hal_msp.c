@@ -23,9 +23,7 @@
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
-extern DMA_HandleTypeDef hdma_adc3;
-
-extern DMA_HandleTypeDef hdma_adc4;
+extern DMA_HandleTypeDef hdma_adc1;
 
 extern DMA_HandleTypeDef hdma_spi1_tx;
 
@@ -84,7 +82,7 @@ void HAL_MspInit(void)
   /* USER CODE END MspInit 1 */
 }
 
-static uint32_t HAL_RCC_ADC34_CLK_ENABLED=0;
+static uint32_t HAL_RCC_ADC12_CLK_ENABLED=0;
 
 /**
   * @brief ADC MSP Initialization
@@ -94,69 +92,71 @@ static uint32_t HAL_RCC_ADC34_CLK_ENABLED=0;
   */
 void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
 {
-  if(hadc->Instance==ADC3)
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(hadc->Instance==ADC1)
   {
-    /* USER CODE BEGIN ADC3_MspInit 0 */
+    /* USER CODE BEGIN ADC1_MspInit 0 */
 
-    /* USER CODE END ADC3_MspInit 0 */
+    /* USER CODE END ADC1_MspInit 0 */
     /* Peripheral clock enable */
-    HAL_RCC_ADC34_CLK_ENABLED++;
-    if(HAL_RCC_ADC34_CLK_ENABLED==1){
-      __HAL_RCC_ADC34_CLK_ENABLE();
+    HAL_RCC_ADC12_CLK_ENABLED++;
+    if(HAL_RCC_ADC12_CLK_ENABLED==1){
+      __HAL_RCC_ADC12_CLK_ENABLE();
     }
 
-    /* ADC3 DMA Init */
-    /* ADC3 Init */
-    hdma_adc3.Instance = DMA2_Channel5;
-    hdma_adc3.Init.Direction = DMA_PERIPH_TO_MEMORY;
-    hdma_adc3.Init.PeriphInc = DMA_PINC_DISABLE;
-    hdma_adc3.Init.MemInc = DMA_MINC_ENABLE;
-    hdma_adc3.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
-    hdma_adc3.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
-    hdma_adc3.Init.Mode = DMA_NORMAL;
-    hdma_adc3.Init.Priority = DMA_PRIORITY_LOW;
-    if (HAL_DMA_Init(&hdma_adc3) != HAL_OK)
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    /**ADC1 GPIO Configuration
+    PA0     ------> ADC1_IN1
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_0;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* ADC1 DMA Init */
+    /* ADC1 Init */
+    hdma_adc1.Instance = DMA1_Channel1;
+    hdma_adc1.Init.Direction = DMA_PERIPH_TO_MEMORY;
+    hdma_adc1.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_adc1.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_adc1.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
+    hdma_adc1.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+    hdma_adc1.Init.Mode = DMA_NORMAL;
+    hdma_adc1.Init.Priority = DMA_PRIORITY_LOW;
+    if (HAL_DMA_Init(&hdma_adc1) != HAL_OK)
     {
       Error_Handler();
     }
 
-    __HAL_LINKDMA(hadc,DMA_Handle,hdma_adc3);
+    __HAL_LINKDMA(hadc,DMA_Handle,hdma_adc1);
 
-    /* USER CODE BEGIN ADC3_MspInit 1 */
+    /* USER CODE BEGIN ADC1_MspInit 1 */
 
-    /* USER CODE END ADC3_MspInit 1 */
+    /* USER CODE END ADC1_MspInit 1 */
   }
-  else if(hadc->Instance==ADC4)
+  else if(hadc->Instance==ADC2)
   {
-    /* USER CODE BEGIN ADC4_MspInit 0 */
+    /* USER CODE BEGIN ADC2_MspInit 0 */
 
-    /* USER CODE END ADC4_MspInit 0 */
+    /* USER CODE END ADC2_MspInit 0 */
     /* Peripheral clock enable */
-    HAL_RCC_ADC34_CLK_ENABLED++;
-    if(HAL_RCC_ADC34_CLK_ENABLED==1){
-      __HAL_RCC_ADC34_CLK_ENABLE();
+    HAL_RCC_ADC12_CLK_ENABLED++;
+    if(HAL_RCC_ADC12_CLK_ENABLED==1){
+      __HAL_RCC_ADC12_CLK_ENABLE();
     }
 
-    /* ADC4 DMA Init */
-    /* ADC4 Init */
-    hdma_adc4.Instance = DMA2_Channel2;
-    hdma_adc4.Init.Direction = DMA_PERIPH_TO_MEMORY;
-    hdma_adc4.Init.PeriphInc = DMA_PINC_DISABLE;
-    hdma_adc4.Init.MemInc = DMA_MINC_ENABLE;
-    hdma_adc4.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
-    hdma_adc4.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
-    hdma_adc4.Init.Mode = DMA_NORMAL;
-    hdma_adc4.Init.Priority = DMA_PRIORITY_LOW;
-    if (HAL_DMA_Init(&hdma_adc4) != HAL_OK)
-    {
-      Error_Handler();
-    }
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    /**ADC2 GPIO Configuration
+    PC3     ------> ADC2_IN9
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_3;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-    __HAL_LINKDMA(hadc,DMA_Handle,hdma_adc4);
+    /* USER CODE BEGIN ADC2_MspInit 1 */
 
-    /* USER CODE BEGIN ADC4_MspInit 1 */
-
-    /* USER CODE END ADC4_MspInit 1 */
+    /* USER CODE END ADC2_MspInit 1 */
   }
 
 }
@@ -169,134 +169,47 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
   */
 void HAL_ADC_MspDeInit(ADC_HandleTypeDef* hadc)
 {
-  if(hadc->Instance==ADC3)
+  if(hadc->Instance==ADC1)
   {
-    /* USER CODE BEGIN ADC3_MspDeInit 0 */
+    /* USER CODE BEGIN ADC1_MspDeInit 0 */
 
-    /* USER CODE END ADC3_MspDeInit 0 */
+    /* USER CODE END ADC1_MspDeInit 0 */
     /* Peripheral clock disable */
-    HAL_RCC_ADC34_CLK_ENABLED--;
-    if(HAL_RCC_ADC34_CLK_ENABLED==0){
-      __HAL_RCC_ADC34_CLK_DISABLE();
+    HAL_RCC_ADC12_CLK_ENABLED--;
+    if(HAL_RCC_ADC12_CLK_ENABLED==0){
+      __HAL_RCC_ADC12_CLK_DISABLE();
     }
 
-    /* ADC3 DMA DeInit */
+    /**ADC1 GPIO Configuration
+    PA0     ------> ADC1_IN1
+    */
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_0);
+
+    /* ADC1 DMA DeInit */
     HAL_DMA_DeInit(hadc->DMA_Handle);
-    /* USER CODE BEGIN ADC3_MspDeInit 1 */
+    /* USER CODE BEGIN ADC1_MspDeInit 1 */
 
-    /* USER CODE END ADC3_MspDeInit 1 */
+    /* USER CODE END ADC1_MspDeInit 1 */
   }
-  else if(hadc->Instance==ADC4)
+  else if(hadc->Instance==ADC2)
   {
-    /* USER CODE BEGIN ADC4_MspDeInit 0 */
+    /* USER CODE BEGIN ADC2_MspDeInit 0 */
 
-    /* USER CODE END ADC4_MspDeInit 0 */
+    /* USER CODE END ADC2_MspDeInit 0 */
     /* Peripheral clock disable */
-    HAL_RCC_ADC34_CLK_ENABLED--;
-    if(HAL_RCC_ADC34_CLK_ENABLED==0){
-      __HAL_RCC_ADC34_CLK_DISABLE();
+    HAL_RCC_ADC12_CLK_ENABLED--;
+    if(HAL_RCC_ADC12_CLK_ENABLED==0){
+      __HAL_RCC_ADC12_CLK_DISABLE();
     }
 
-    /* ADC4 DMA DeInit */
-    HAL_DMA_DeInit(hadc->DMA_Handle);
-    /* USER CODE BEGIN ADC4_MspDeInit 1 */
-
-    /* USER CODE END ADC4_MspDeInit 1 */
-  }
-
-}
-
-/**
-  * @brief OPAMP MSP Initialization
-  * This function configures the hardware resources used in this example
-  * @param hopamp: OPAMP handle pointer
-  * @retval None
-  */
-void HAL_OPAMP_MspInit(OPAMP_HandleTypeDef* hopamp)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(hopamp->Instance==OPAMP3)
-  {
-    /* USER CODE BEGIN OPAMP3_MspInit 0 */
-
-    /* USER CODE END OPAMP3_MspInit 0 */
-
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**OPAMP3 GPIO Configuration
-    PB0     ------> OPAMP3_VINP
-    PB1     ------> OPAMP3_VOUT
+    /**ADC2 GPIO Configuration
+    PC3     ------> ADC2_IN9
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    HAL_GPIO_DeInit(GPIOC, GPIO_PIN_3);
 
-    /* USER CODE BEGIN OPAMP3_MspInit 1 */
+    /* USER CODE BEGIN ADC2_MspDeInit 1 */
 
-    /* USER CODE END OPAMP3_MspInit 1 */
-  }
-  else if(hopamp->Instance==OPAMP4)
-  {
-    /* USER CODE BEGIN OPAMP4_MspInit 0 */
-
-    /* USER CODE END OPAMP4_MspInit 0 */
-
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**OPAMP4 GPIO Configuration
-    PB12     ------> OPAMP4_VOUT
-    PB13     ------> OPAMP4_VINP
-    */
-    GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13;
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    /* USER CODE BEGIN OPAMP4_MspInit 1 */
-
-    /* USER CODE END OPAMP4_MspInit 1 */
-  }
-
-}
-
-/**
-  * @brief OPAMP MSP De-Initialization
-  * This function freeze the hardware resources used in this example
-  * @param hopamp: OPAMP handle pointer
-  * @retval None
-  */
-void HAL_OPAMP_MspDeInit(OPAMP_HandleTypeDef* hopamp)
-{
-  if(hopamp->Instance==OPAMP3)
-  {
-    /* USER CODE BEGIN OPAMP3_MspDeInit 0 */
-
-    /* USER CODE END OPAMP3_MspDeInit 0 */
-
-    /**OPAMP3 GPIO Configuration
-    PB0     ------> OPAMP3_VINP
-    PB1     ------> OPAMP3_VOUT
-    */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_0|GPIO_PIN_1);
-
-    /* USER CODE BEGIN OPAMP3_MspDeInit 1 */
-
-    /* USER CODE END OPAMP3_MspDeInit 1 */
-  }
-  else if(hopamp->Instance==OPAMP4)
-  {
-    /* USER CODE BEGIN OPAMP4_MspDeInit 0 */
-
-    /* USER CODE END OPAMP4_MspDeInit 0 */
-
-    /**OPAMP4 GPIO Configuration
-    PB12     ------> OPAMP4_VOUT
-    PB13     ------> OPAMP4_VINP
-    */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_12|GPIO_PIN_13);
-
-    /* USER CODE BEGIN OPAMP4_MspDeInit 1 */
-
-    /* USER CODE END OPAMP4_MspDeInit 1 */
+    /* USER CODE END ADC2_MspDeInit 1 */
   }
 
 }
