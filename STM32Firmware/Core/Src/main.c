@@ -41,8 +41,13 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc1;
-DMA_HandleTypeDef hdma_adc1;
+ADC_HandleTypeDef hadc3;
+ADC_HandleTypeDef hadc4;
+DMA_HandleTypeDef hdma_adc3;
+DMA_HandleTypeDef hdma_adc4;
+
+OPAMP_HandleTypeDef hopamp3;
+OPAMP_HandleTypeDef hopamp4;
 
 SPI_HandleTypeDef hspi1;
 DMA_HandleTypeDef hdma_spi1_tx;
@@ -52,16 +57,15 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-// Mình set số lượng mẫu thu thập cho mỗi khung hình là 1024 mẫu/kênh để đảm bảo đủ dữ liệu hiển thị và dịch trục X.
+// Set số lượng mẫu thu thập cho mỗi khung hình là 1024 mẫu/kênh
 #define SAMPLES_PER_CH    1024
 // Tổng số mẫu DMA cần lấy = Kênh 1 + Kênh 2
 #define TOTAL_SAMPLES	(SAMPLES_PER_CH * 2)
 
 // Khai báo struct đóng gói dữ liệu truyền qua SPI.
-// BẮT BUỘC dùng __attribute__((packed)) để vô hiệu hóa tính năng tự động đệm (padding) của GCC.
-// Nếu không có lệnh này, kích thước struct sẽ bị sai lệch, ESP32 nhận dữ liệu sẽ bị "rác".
+// dùng __attribute__((packed)) để vô hiệu hóa tính năng tự động đệm (padding) của GCC.
 typedef struct __attribute__((packed)){
-	uint8_t header[2]; // Byte đồng bộ đầu khung: 0xAA, 0xBB để ESP32 nhận diện điểm bắt đầu gói tin
+	uint8_t header[2]; // Byte header: 0xAA, 0xBB để ESP32 nhận diện điểm bắt đầu gói tin
 	uint16_t ch1[SAMPLES_PER_CH]; // Dữ liệu thô ADC Kênh 1 (1024 mẫu * 2 byte = 2048 bytes)
 	uint16_t ch2[SAMPLES_PER_CH]; // Dữ liệu thô ADC Kênh 2 (1024 mẫu * 2 byte = 2048 bytes)
 	uint8_t padding[2]; // 2 byte padding thủ công để chống lỗi Hardfault do Misaligned memory access trên vi điều khiển ARM
@@ -79,6 +83,8 @@ typedef struct __attribute__((packed)){
 	uint8_t ch_mode;   // Cờ bitmask chọn kênh hiển thị (1: CH1, 2: CH2, 3: Bật cả 2 kênh)
 	float y_scale1;    // Hệ số phóng to/thu nhỏ trục Y của CH1 (điều khiển bởi Encoder 1)
 	float y_scale2;    // Hệ số phóng to/thu nhỏ trục Y của CH2 (điều khiển bởi Encoder 1)
+	float x_scale1;	   // Hệ số thu phóng trục X của CH1
+	float x_scale2;    // Hệ số thu phóng trục Y của CH2
 	int16_t y_offset1; // Số pixel dịch chuyển sóng lên/xuống của CH1
 	int16_t y_offset2; // Số pixel dịch chuyển sóng lên/xuống của CH2
 
@@ -86,30 +92,33 @@ typedef struct __attribute__((packed)){
 	uint8_t offset_axis; // Trạng thái của nút nhấn: 0 đang chọn chỉnh Y, 1 đang chọn chỉnh X
 	int16_t x_offset1; // Số pixel dịch chuyển trục thời gian (X) cho CH1
 	int16_t x_offset2; // Số pixel dịch chuyển trục thời gian (X) cho CH2
-	uint8_t reset_flag; // Cờ báo hiệu cho ESP32 biết người dùng vừa nhấn nút Autoset (để ESP32 xóa vết sóng cũ trên màn)
+	uint8_t reset_flag; // Cờ reset
 
-	uint8_t footer[2]; // Byte kết thúc khung: 0xCC, 0xDD
+	uint8_t footer[2]; // Byte footer: 0xCC, 0xDD
 } Packet_t;
 
-Packet_t tx_packet; // Khởi tạo biến toàn cục chứa gói tin truyền
-#define PACKET_SIZE sizeof(Packet_t) // Macro tự động tính kích thước Struct để nhét vào hàm DMA
+Packet_t tx_packet; // Khởi tạo biến toàn cục chứa gói tin
+#define PACKET_SIZE sizeof(Packet_t)
 
 // Mảng đệm Ping-Pong cho ADC DMA. Kích thước = Số mẫu * 2 kênh * 2 (Ping và Pong). Tổng = 4096 phần tử.
 // Sử dụng Ping-Pong buffer giúp CPU có thể xử lý nửa mảng này trong khi phần cứng DMA đang tự động điền dữ liệu vào nửa mảng kia, đảm bảo Real-time.
-uint16_t adc_buffer[SAMPLES_PER_CH * 4];
-volatile uint8_t data_ready_flag = 0; // Cờ báo hiệu ngắt DMA: 1 = Nửa đầu (Ping) đã đầy, 2 = Nửa sau (Pong) đã đầy
+volatile uint8_t adc3_ready = 0;
+volatile uint8_t adc4_ready = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_ADC3_Init(void);
+static void MX_OPAMP3_Init(void);
+static void MX_ADC4_Init(void);
+static void MX_OPAMP4_Init(void);
 /* USER CODE BEGIN PFP */
-// Hàm xử lý tín hiệu DSP (Digital Signal Processing): Tìm Trigger, tính Vrms, Vpp, Freq
+// Hàm xử lý tín hiệu: Tìm Trigger, tính Vrms, Vpp, Freq
 uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg, float* vrms, float* vamp);
 /* USER CODE END PFP */
 
@@ -148,10 +157,13 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ADC1_Init();
   MX_TIM3_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
+  MX_ADC3_Init();
+  MX_OPAMP3_Init();
+  MX_ADC4_Init();
+  MX_OPAMP4_Init();
   /* USER CODE BEGIN 2 */
   // Khởi tạo ban đầu: Chốt chân Chip Select (CS) của SPI ở mức CAO (Không truyền)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
@@ -162,11 +174,15 @@ int main(void)
   tx_packet.footer[0] = 0xCC;
   tx_packet.footer[1] = 0xDD;
 
-  // Calib ADC để loại bỏ sai số nội vi trước khi chạy thực tế
-  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+  HAL_OPAMP_Start(&hopamp3);
+  HAL_OPAMP_Start(&hopamp4);
 
-  // Kích hoạt bộ chuyển đổi ADC chạy ở chế độ DMA Circular (Quay vòng tự động đổ vào mảng adc_buffer)
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, TOTAL_SAMPLES * 2);
+  // Calib ADC để loại bỏ sai số nội vi trước khi chạy thực tế
+  HAL_ADCEx_Calibration_Start(&hadc3, ADC_SINGLE_ENDED);
+  HAL_ADCEx_Calibration_Start(&hadc4, ADC_SINGLE_ENDED);
+  // Kích hoạt bộ chuyển đổi ADC chạy ở chế độ DMA Circular
+  HAL_ADC_Start_DMA(&hadc3, (uint32_t*)tx_packet.ch1, SAMPLES_PER_CH);
+  HAL_ADC_Start_DMA(&hadc4, (uint32_t*)tx_packet.ch2, SAMPLES_PER_CH);
 
   // Khởi động Timer 3. Timer 3 được cấu hình làm TRGO (Trigger Output) tạo xung đập nhịp 100kHz để kích ADC lấy mẫu.
   HAL_TIM_Base_Start(&htim3);
@@ -176,13 +192,15 @@ int main(void)
   uint32_t last_btn_tick = 0;
   tx_packet.y_scale1 = 1.0f;
   tx_packet.y_scale2 = 1.0f;
+  tx_packet.x_scale1 = 1.0f;
+  tx_packet.x_scale2 = 1.0f;
   tx_packet.y_offset1 = 0;
   tx_packet.y_offset2 = 0;
   tx_packet.offset_axis = 0;
   tx_packet.x_offset1 = 0;
   tx_packet.x_offset2 = 0;
 
-  // Biến lưu trạng thái của 2 chân CLK Encoder để so sánh cạnh xuống (Falling Edge)
+  // Biến lưu trạng thái của 2 chân CLK Encoder để so sánh cạnh xuống
   uint8_t last_clk1 = 1;
   uint8_t last_clk2 = 1;
   /* USER CODE END 2 */
@@ -194,20 +212,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  // Khởi tạo 2 biến dùng để chống dội phím (Debounce) bằng phần mềm cho Encoder
+	  // Khởi tạo 2 biến dùng để chống dội phím (Debounce) cho Encoder
 	  uint32_t last_enc1_tick = 0;
 	  uint32_t last_enc2_tick = 0;
-	  uint32_t current_tick = HAL_GetTick(); // Lấy thời gian ms hiện tại của hệ thống (sử dụng SysTick)
+	  uint32_t current_tick = HAL_GetTick(); // Lấy thời gian ms hiện tại của hệ thống
 
 	  //--- 1. ĐỌC CÔNG TẮC CHỌN KÊNH ---
-	  // Kiểm tra chân PC4 và PC5. Do mắc Pull-up nên khi công tắc đóng mạch với GND, tín hiệu sẽ là mức Thấp (RESET).
+	  // Kiểm tra chân PC4 và PC5
 	  uint8_t ch1_en = (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_4) == GPIO_PIN_RESET) ? 1:0;
 	  uint8_t ch2_en = (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_5) == GPIO_PIN_RESET) ? 2:0;
 	  // Dùng phép toán OR Bitmask để gộp chung cờ hiển thị (1: bật CH1, 2: bật CH2, 3: bật cả 2)
 	  tx_packet.ch_mode = ch1_en | ch2_en;
 
 	  //--- 2. ĐỌC NÚT NHẤN (Có Debounce 200ms) ---
-	  // Giải thuật chống rung phần mềm: Chỉ chấp nhận lần bấm tiếp theo nếu khoảng cách giữa 2 lần bấm cách nhau > 200ms.
+	  // Giải thuật chống rung: Chỉ chấp nhận lần bấm tiếp theo nếu khoảng cách giữa 2 lần bấm cách nhau > 200ms.
 	  if(current_tick - last_btn_tick > 200){
 
 		  // Nút Dừng hình / Chạy tiếp (Hold)
@@ -218,6 +236,8 @@ int main(void)
 		  }
 		  // Nút Autoset (Trả mọi thông số về default)
 		  else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) == GPIO_PIN_RESET){
+			  tx_packet.x_scale1 = 1.0f;
+			  tx_packet.x_scale2 = 1.0f;
 			  tx_packet.y_scale1 = 1.0f; // Trả hệ số zoom trục Y về 1x
 			  tx_packet.y_scale2 = 1.0f;
 			  tx_packet.y_offset1 = 0;   // Trả vị trí gốc Y về giữa màn hình
@@ -225,7 +245,7 @@ int main(void)
 			  tx_packet.x_offset1 = 0;   // Trả gốc thời gian X về ban đầu
 			  tx_packet.x_offset2 = 0;
 			  tx_packet.offset_axis = 0;
-			  tx_packet.reset_flag = 1;  // Bật cờ để ra lệnh cho ESP32 clear sạch màn hình
+			  tx_packet.reset_flag = 1;  // Bật cờ để ra lệnh cho ESP32 clear màn hình
 			  last_btn_tick = current_tick;
 		  }
 		  // Nút Chuyển chế độ điều khiển trục (X hoặc Y)
@@ -237,28 +257,38 @@ int main(void)
 
 	  //--- 3. ĐỌC ROTARY ENCODER ---
 	  // Sử dụng giải thuật State Machine cơ bản quét sườn xuống của chân CLK, sau đó đọc chân DT để biết chiều quay.
-
 	  // ENCODER 1: Dùng để phóng to/thu nhỏ sóng (Scale Y)
-	  uint8_t clk1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+	  uint8_t clk1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10);
 	  // Phát hiện cạnh xuống (clk1 hiện tại = 0, clk1 trước đó = 1)
 	  if (clk1 == 0 && last_clk1 == 1){
 	        // Giải thuật Debounce 5ms cho Encoder để lọc các gai nhiễu do tiếp điểm cọ xát
 	        if (current_tick - last_enc1_tick > 5) {
 	  		  // Nếu chân DT khác mức logic của CLK -> Quay cùng chiều kim đồng hồ (Tăng). Ngược lại là giảm.
-	  		  float delta = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1) != clk1) ? 0.2f : -0.2f;
-
-	  		  if(ch1_en) {
-	  			  tx_packet.y_scale1 += delta;
-	  			  // Ép biên độ zoom trong khoảng an toàn (0.2x đến 5.0x)
-	  			  if (tx_packet.y_scale1 < 0.2f) tx_packet.y_scale1 = 0.2f;
-	  			  if (tx_packet.y_scale1 > 5.0f) tx_packet.y_scale1 = 5.0f;
+	  		  float delta = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) != clk1) ? 0.2f : -0.2f;
+	  		  if (tx_packet.offset_axis == 0){
+	  			 if (ch1_en) {
+	  				 tx_packet.y_scale1 += delta;
+	  				 if (tx_packet.y_scale1 < 0.2f) tx_packet.y_scale1 = 0.2f;
+	  				 if (tx_packet.y_scale1 > 5.0f) tx_packet.y_scale1 = 5.0f;
+	  			 }
+	  			 if (ch2_en) {
+	  				tx_packet.y_scale2 += delta;
+	  				if (tx_packet.y_scale2 < 0.2f) tx_packet.y_scale2 = 0.2f;
+	  				if (tx_packet.y_scale2 > 5.0f) tx_packet.y_scale2 = 5.0f;
+	  			 }
+	  		  } else {
+	  			if (ch1_en) {
+	  				tx_packet.x_scale1 += delta;
+	  				if (tx_packet.x_scale1 < 0.8f) tx_packet.x_scale1 = 0.8f;
+	  				if (tx_packet.x_scale1 > 5.0f) tx_packet.x_scale1 = 5.0f;
+	  			}
+	  			if (ch2_en) {
+	  				tx_packet.x_scale2 += delta;
+	  				if (tx_packet.x_scale2 < 0.8f) tx_packet.x_scale2 = 0.8f;
+	  				if (tx_packet.x_scale2 > 5.0f) tx_packet.x_scale2 = 5.0f;
+	  			}
 	  		  }
-	  		  if(ch2_en) {
-	  			  tx_packet.y_scale2 += delta;
-	  			  if (tx_packet.y_scale2 < 0.2f) tx_packet.y_scale2 = 0.2f;
-	  			  if (tx_packet.y_scale2 > 5.0f) tx_packet.y_scale2 = 5.0f;
-	  		  }
-	          last_enc1_tick = current_tick;
+	  		  last_enc1_tick = current_tick;
 	        }
 	  }
 	  last_clk1 = clk1;
@@ -303,21 +333,12 @@ int main(void)
 
 	  // --- 4. TÁCH DỮ LIỆU DMA, XỬ LÝ DSP VÀ TRUYỀN SPI ---
 	  // Cờ data_ready_flag được kích bởi các hàm callback ngắt của DMA khi nó điền xong Ping hoặc Pong
-      if (data_ready_flag != 0) {
+      if (adc3_ready == 1 && adc4_ready == 1) {
 
     	  // BƯỚC 1: CẬP NHẬT VÀ XỬ LÝ SÓNG (Chỉ chạy khi người dùng KHÔNG bấm Hold)
     	  if (is_holding == 0) {
-    	      // Nếu flag = 1 (Nửa Ping đầy), trỏ tới đầu mảng. Nếu = 2 (Nửa Pong đầy), trỏ tới giữa mảng.
-    	      uint16_t* current_buffer = (data_ready_flag == 1) ? &adc_buffer[0] : &adc_buffer[SAMPLES_PER_CH*2];
-
-    	      // Thuật toán "Tách kênh": ADC đo luân phiên CH1-CH2-CH1-CH2... nên ta phải chải lại mảng
-    	      for(int i = 0; i < SAMPLES_PER_CH; i++) {
-    	          tx_packet.ch1[i] = current_buffer[i*2];
-    	          tx_packet.ch2[i] = current_buffer[i*2+1];
-    	      }
 
     	      // Logic chọn kênh để kích hoạt hàm Process_Signal (Tìm Trigger + Thông số)
-    	      // Nếu đang tắt kênh 1 (chỉ bật kênh 2), ta phải dùng tín hiệu kênh 2 làm Trigger mốc để sóng CH2 không bị trôi
     	      if (tx_packet.ch_mode == 2){
         	      tx_packet.trigger_idx = Process_Signal(tx_packet.ch2, &tx_packet.vpp2, &tx_packet.freq2, &tx_packet.vavg2, &tx_packet.vrms2, &tx_packet.vamp2);
     	      }
@@ -329,7 +350,8 @@ int main(void)
     	  }
 
     	  // BƯỚC 2: XÓA CỜ NGẮT DMA (Phải thực hiện dù có bấm Hold hay không để hệ thống không bị treo)
-    	  data_ready_flag = 0;
+    	  adc3_ready = 0;
+    	  adc4_ready = 0;
 
     	  // BƯỚC 3: BẮN GÓI TIN SANG ESP32 (Giao tiếp SPI bằng DMA)
     	  // Lưu ý: Quá trình truyền này được đặt ngoài khối "is_holding" để ESP32 vẫn liên tục nhận được cập nhật về thao tác nút bấm, cursor, zoom ngay cả khi màn hình đang Hold.
@@ -337,9 +359,6 @@ int main(void)
     	      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); // Kéo chân CS xuống LOW để chọn chip Slave (ESP32)
     	      // Sử dụng DMA để đẩy gói tin ~2KB đi. CPU không phải chờ truyền xong.
     	      HAL_SPI_Transmit_DMA(&hspi1, (uint8_t*)&tx_packet, PACKET_SIZE);
-
-    	      // Giải thuật "Xóa cờ Auto-Clear": Sau khi nạp lệnh truyền gói tin (có chứa cờ reset=1) vào luồng DMA,
-    	      // ta ngay lập tức dập cờ reset về 0 ở chu kỳ kế tiếp. Tránh việc ESP32 nhận được reset liên tục và xóa màn hình liên tục.
     	      tx_packet.reset_flag = 0;
     	  }
       }
@@ -385,10 +404,8 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_ADC12
-                              |RCC_PERIPHCLK_TIM34;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_TIM34;
   PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
-  PeriphClkInit.Adc12ClockSelection = RCC_ADC12PLLCLK_DIV1;
   PeriphClkInit.Tim34ClockSelection = RCC_TIM34CLK_HCLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
@@ -397,41 +414,41 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief ADC1 Initialization Function
+  * @brief ADC3 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_ADC1_Init(void)
+static void MX_ADC3_Init(void)
 {
 
-  /* USER CODE BEGIN ADC1_Init 0 */
+  /* USER CODE BEGIN ADC3_Init 0 */
 
-  /* USER CODE END ADC1_Init 0 */
+  /* USER CODE END ADC3_Init 0 */
 
   ADC_MultiModeTypeDef multimode = {0};
   ADC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE BEGIN ADC1_Init 1 */
+  /* USER CODE BEGIN ADC3_Init 1 */
 
-  /* USER CODE END ADC1_Init 1 */
+  /* USER CODE END ADC3_Init 1 */
 
   /** Common config
   */
-  hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
-  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
-  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T3_TRGO;
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 2;
-  hadc1.Init.DMAContinuousRequests = ENABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  hadc1.Init.LowPowerAutoWait = DISABLE;
-  hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
-  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  hadc3.Instance = ADC3;
+  hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV1;
+  hadc3.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc3.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc3.Init.ContinuousConvMode = DISABLE;
+  hadc3.Init.DiscontinuousConvMode = DISABLE;
+  hadc3.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
+  hadc3.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T3_TRGO;
+  hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc3.Init.NbrOfConversion = 1;
+  hadc3.Init.DMAContinuousRequests = DISABLE;
+  hadc3.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc3.Init.LowPowerAutoWait = DISABLE;
+  hadc3.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+  if (HAL_ADC_Init(&hadc3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -439,7 +456,7 @@ static void MX_ADC1_Init(void)
   /** Configure the ADC multi-mode
   */
   multimode.Mode = ADC_MODE_INDEPENDENT;
-  if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
+  if (HAL_ADCEx_MultiModeConfigChannel(&hadc3, &multimode) != HAL_OK)
   {
     Error_Handler();
   }
@@ -452,22 +469,134 @@ static void MX_ADC1_Init(void)
   sConfig.SamplingTime = ADC_SAMPLETIME_61CYCLES_5;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  if (HAL_ADC_ConfigChannel(&hadc3, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC3_Init 2 */
+
+  /* USER CODE END ADC3_Init 2 */
+
+}
+
+/**
+  * @brief ADC4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC4_Init(void)
+{
+
+  /* USER CODE BEGIN ADC4_Init 0 */
+
+  /* USER CODE END ADC4_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC4_Init 1 */
+
+  /* USER CODE END ADC4_Init 1 */
+
+  /** Common config
+  */
+  hadc4.Instance = ADC4;
+  hadc4.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV1;
+  hadc4.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc4.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc4.Init.ContinuousConvMode = DISABLE;
+  hadc4.Init.DiscontinuousConvMode = DISABLE;
+  hadc4.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
+  hadc4.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T3_TRGO;
+  hadc4.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc4.Init.NbrOfConversion = 1;
+  hadc4.Init.DMAContinuousRequests = DISABLE;
+  hadc4.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc4.Init.LowPowerAutoWait = DISABLE;
+  hadc4.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+  if (HAL_ADC_Init(&hadc4) != HAL_OK)
   {
     Error_Handler();
   }
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_2;
-  sConfig.Rank = ADC_REGULAR_RANK_2;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  sConfig.Channel = ADC_CHANNEL_3;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.SamplingTime = ADC_SAMPLETIME_61CYCLES_5;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc4, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN ADC1_Init 2 */
+  /* USER CODE BEGIN ADC4_Init 2 */
 
-  /* USER CODE END ADC1_Init 2 */
+  /* USER CODE END ADC4_Init 2 */
+
+}
+
+/**
+  * @brief OPAMP3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_OPAMP3_Init(void)
+{
+
+  /* USER CODE BEGIN OPAMP3_Init 0 */
+
+  /* USER CODE END OPAMP3_Init 0 */
+
+  /* USER CODE BEGIN OPAMP3_Init 1 */
+
+  /* USER CODE END OPAMP3_Init 1 */
+  hopamp3.Instance = OPAMP3;
+  hopamp3.Init.Mode = OPAMP_PGA_MODE;
+  hopamp3.Init.NonInvertingInput = OPAMP_NONINVERTINGINPUT_IO0;
+  hopamp3.Init.TimerControlledMuxmode = OPAMP_TIMERCONTROLLEDMUXMODE_DISABLE;
+  hopamp3.Init.PgaConnect = OPAMP_PGA_CONNECT_INVERTINGINPUT_NO;
+  hopamp3.Init.PgaGain = OPAMP_PGA_GAIN_16;
+  hopamp3.Init.UserTrimming = OPAMP_TRIMMING_FACTORY;
+  if (HAL_OPAMP_Init(&hopamp3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN OPAMP3_Init 2 */
+
+  /* USER CODE END OPAMP3_Init 2 */
+
+}
+
+/**
+  * @brief OPAMP4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_OPAMP4_Init(void)
+{
+
+  /* USER CODE BEGIN OPAMP4_Init 0 */
+
+  /* USER CODE END OPAMP4_Init 0 */
+
+  /* USER CODE BEGIN OPAMP4_Init 1 */
+
+  /* USER CODE END OPAMP4_Init 1 */
+  hopamp4.Instance = OPAMP4;
+  hopamp4.Init.Mode = OPAMP_PGA_MODE;
+  hopamp4.Init.NonInvertingInput = OPAMP_NONINVERTINGINPUT_IO0;
+  hopamp4.Init.TimerControlledMuxmode = OPAMP_TIMERCONTROLLEDMUXMODE_DISABLE;
+  hopamp4.Init.PgaConnect = OPAMP_PGA_CONNECT_INVERTINGINPUT_NO;
+  hopamp4.Init.PgaGain = OPAMP_PGA_GAIN_16;
+  hopamp4.Init.UserTrimming = OPAMP_TRIMMING_FACTORY;
+  if (HAL_OPAMP_Init(&hopamp4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN OPAMP4_Init 2 */
+
+  /* USER CODE END OPAMP4_Init 2 */
 
 }
 
@@ -599,14 +728,18 @@ static void MX_DMA_Init(void)
 
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
+  __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
   /* DMA1_Channel3_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
+  /* DMA2_Channel2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Channel2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Channel2_IRQn);
+  /* DMA2_Channel5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Channel5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Channel5_IRQn);
 
 }
 
@@ -652,8 +785,14 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB0 PB1 PB4 PB5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5;
+  /*Configure GPIO pins : PB10 PB11 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_11;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB4 PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -664,24 +803,22 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Callback được gọi tự động khi DMA điền đầy NỬA ĐẦU mảng adc_buffer (Ping)
-void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
-    if(hadc->Instance == ADC1) {
-        data_ready_flag = 1; // Báo cho vòng lặp while(1) biết mảng Ping đã sẵn sàng
-    }
-}
-
 // Callback được gọi tự động khi DMA điền đầy NỬA SAU mảng adc_buffer (Pong)
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
-    if(hadc->Instance == ADC1) {
-        data_ready_flag = 2; // Báo cho vòng lặp while(1) biết mảng Pong đã sẵn sàng
+    if(hadc->Instance == ADC3) {
+    	adc3_ready = 1; // Luồng DMA của ADC3 xong -> Bật flag kênh 1
+    }
+    if(hadc->Instance == ADC4) {
+    	adc4_ready = 1; // Luồng DMA của ADC4 xong -> Bật flag kênh 2
     }
 }
 
 // Callback được gọi tự động sau khi DMA hoàn thành việc bắn toàn bộ gói SPI sang ESP32
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
     if(hspi->Instance == SPI1) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET); // Kéo chân CS lên mức CAO để chốt quá trình truyền và giải phóng bus
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);// Kéo chân CS lên mức CAO để chốt quá trình truyền và giải phóng bus
+        HAL_ADC_Start_DMA(&hadc3, (uint32_t*)tx_packet.ch1, SAMPLES_PER_CH);
+        HAL_ADC_Start_DMA(&hadc4, (uint32_t*)tx_packet.ch2, SAMPLES_PER_CH);
     }
 }
 
@@ -701,7 +838,8 @@ uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg
     }
 
     // 2. Chuyển đổi dữ liệu thô (0-4095) sang Volt
-    float adc_to_volt = 3.3f/4095.0f;
+    float adc_to_volt = 3.3f/4095.0f*4.0625f;
+
     *vpp = (float)(max - min) * adc_to_volt;
     *vamp = *vpp / 2.0f;
     float avg_raw = (float)sum / SAMPLES_PER_CH;
@@ -746,6 +884,7 @@ uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg
             *freq = 0;
         }
 
+
         // 5. TÌM ĐIỂM NEO VẼ SÓNG (TRIGGER) CŨNG BẰNG STATE MACHINE
         int display_trigger = 400; // Mặc định ở mẫu 400 để dành chỗ cho dịch trục X
 
@@ -764,7 +903,6 @@ uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg
         }
 
         return (uint16_t)display_trigger;
-
 }
 /* USER CODE END 4 */
 
