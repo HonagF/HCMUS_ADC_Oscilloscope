@@ -73,7 +73,8 @@ typedef struct __attribute__((packed)){
 	float vavg1, vavg2; // Điện áp trung bình (Average/DC Offset)
 	float vrms1, vrms2; // Điện áp hiệu dụng thực (True RMS)
 	float vamp1, vamp2; // Biên độ sóng (Amplitude)
-	uint16_t trigger_idx; // Vị trí điểm kích hoạt (Trigger Point) trong mảng để ESP32 làm mốc vẽ sóng
+	uint16_t trigger_idx1; // Vị trí điểm kích hoạt (Trigger Point) trong mảng để ESP32 làm mốc vẽ sóng
+	uint16_t trigger_idx2;
 
 	// --- KHỐI ĐIỀU KHIỂN (Giao tiếp với giao diện LCD) ---
 	uint8_t hold_flag; // Cờ dừng màn hình (0: Đang chạy, 1: Giữ nguyên khung hình)
@@ -329,16 +330,8 @@ int main(void)
 
     	  // BƯỚC 1: CẬP NHẬT VÀ XỬ LÝ SÓNG (Chỉ chạy khi người dùng KHÔNG bấm Hold)
     	  if (is_holding == 0) {
-
-    	      // Logic chọn kênh để kích hoạt hàm Process_Signal (Tìm Trigger + Thông số)
-    	      if (tx_packet.ch_mode == 2){
-        	      tx_packet.trigger_idx = Process_Signal(tx_packet.ch2, &tx_packet.vpp2, &tx_packet.freq2, &tx_packet.vavg2, &tx_packet.vrms2, &tx_packet.vamp2);
-    	      }
-    	      else { // Mặc định ưu tiên lấy Trigger theo Kênh 1
-        	      tx_packet.trigger_idx = Process_Signal(tx_packet.ch1, &tx_packet.vpp1, &tx_packet.freq1, &tx_packet.vavg1, &tx_packet.vrms1, &tx_packet.vamp1);
-        	      // Vẫn gọi hàm đo thông số cho Kênh 2 nhưng bỏ qua index trigger của nó
-        	      Process_Signal(tx_packet.ch2, &tx_packet.vpp2, &tx_packet.freq2, &tx_packet.vavg2, &tx_packet.vrms2, &tx_packet.vamp2);
-    	      }
+    	      tx_packet.trigger_idx1 = Process_Signal(tx_packet.ch1, &tx_packet.vpp1, &tx_packet.freq1, &tx_packet.vavg1, &tx_packet.vrms1, &tx_packet.vamp1);
+        	  tx_packet.trigger_idx2 = Process_Signal(tx_packet.ch2, &tx_packet.vpp2, &tx_packet.freq2, &tx_packet.vavg2, &tx_packet.vrms2, &tx_packet.vamp2);
     	  }
 
     	  // BƯỚC 2: XÓA CỜ NGẮT DMA (Phải thực hiện dù có bấm Hold hay không để hệ thống không bị treo)
@@ -351,7 +344,6 @@ int main(void)
     	      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); // Kéo chân CS xuống LOW để chọn chip Slave (ESP32)
     	      // Sử dụng DMA để đẩy gói tin ~2KB đi. CPU không phải chờ truyền xong.
     	      HAL_SPI_Transmit_DMA(&hspi1, (uint8_t*)&tx_packet, PACKET_SIZE);
-    	      tx_packet.reset_flag = 0;
     	  }
       }
   }
@@ -749,6 +741,9 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
     if(hspi->Instance == SPI1) {
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);// Kéo chân CS lên mức CAO để chốt quá trình truyền và giải phóng bus
+
+	    tx_packet.reset_flag = 0;
+
         HAL_ADC_Start_DMA(&hadc1, (uint32_t*)tx_packet.ch1, SAMPLES_PER_CH);
         HAL_ADC_Start_DMA(&hadc2, (uint32_t*)tx_packet.ch2, SAMPLES_PER_CH);
     }
