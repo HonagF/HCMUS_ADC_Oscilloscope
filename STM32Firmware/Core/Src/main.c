@@ -196,18 +196,20 @@ int main(void)
   // Biến lưu trạng thái của 2 chân CLK Encoder để so sánh cạnh xuống
   uint8_t last_clk1 = 1;
   uint8_t last_clk2 = 1;
+  // Khởi tạo 2 biến dùng để chống dội phím (Debounce) cho Encoder
+  uint32_t last_enc1_tick = 0;
+  uint32_t last_enc2_tick = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  // Khởi tạo 2 biến dùng để chống dội phím (Debounce) cho Encoder
-	  uint32_t last_enc1_tick = 0;
-	  uint32_t last_enc2_tick = 0;
 	  uint32_t current_tick = HAL_GetTick(); // Lấy thời gian ms hiện tại của hệ thống
 
 	  //--- 1. ĐỌC CÔNG TẮC CHỌN KÊNH ---
@@ -249,13 +251,12 @@ int main(void)
 	  }
 
 	  //--- 3. ĐỌC ROTARY ENCODER ---
-	  // Sử dụng giải thuật State Machine cơ bản quét sườn xuống của chân CLK, sau đó đọc chân DT để biết chiều quay.
-	  // ENCODER 1: Dùng để phóng to/thu nhỏ sóng (Scale Y)
-	  uint8_t clk1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
-	  // Phát hiện cạnh xuống (clk1 hiện tại = 0, clk1 trước đó = 1)
-	  if (clk1 == 0 && last_clk1 == 1){
-	        // Giải thuật Debounce 5ms cho Encoder để lọc các gai nhiễu do tiếp điểm cọ xát
-	        if (current_tick - last_enc1_tick > 5) {
+	  	  // ENCODER 1: Dùng để phóng to/thu nhỏ sóng (Scale Y/X)
+	  	  uint8_t clk1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+
+	  	  // Phát hiện cạnh xuống và đảm bảo khoảng cách giữa 2 lần nhận tín hiệu tối thiểu là 50ms (chống dội)
+	  	  if (clk1 == 0 && last_clk1 == 1 && (current_tick - last_enc1_tick > 50)){
+
 	  		  // Nếu chân DT khác mức logic của CLK -> Quay cùng chiều kim đồng hồ (Tăng). Ngược lại là giảm.
 	  		  float delta = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1) != clk1) ? 0.2f : -0.2f;
 	  		  if (tx_packet.offset_axis == 0){
@@ -281,16 +282,15 @@ int main(void)
 	  				if (tx_packet.x_scale2 > 5.0f) tx_packet.x_scale2 = 5.0f;
 	  			}
 	  		  }
-	  		  last_enc1_tick = current_tick;
-	        }
-	  }
-	  last_clk1 = clk1;
+	  		  last_enc1_tick = current_tick; // Chốt thời gian lặp để block các tín hiệu nhiễu tiếp theo
+	  	  }
+	  	  last_clk1 = clk1;
 
-	  // ENCODER 2: Dùng để dịch chuyển vị trí sóng theo trục ngang (X) hoặc dọc (Y)
-	  uint8_t clk2 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4);
-	  if (clk2 == 0 && last_clk2 == 1){
-	        if (current_tick - last_enc2_tick > 5) {
-	  	  		// Dịch Y chạy nhanh hơn (bước = 10), dịch X chạy chậm hơn (bước = 5) để mượt
+	  	  // ENCODER 2: Dùng để dịch chuyển vị trí sóng theo trục ngang (X) hoặc dọc (Y)
+	  	  uint8_t clk2 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4);
+
+	  	  if (clk2 == 0 && last_clk2 == 1 && (current_tick - last_enc2_tick > 50)){
+
 	  	  		int delta_y = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5) != clk2) ? -10 : 10;
 	  	  		int delta_x = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5) != clk2) ? -5 : 5;
 
@@ -298,7 +298,7 @@ int main(void)
 	  	            // --- CHẾ ĐỘ 0: ĐANG CHỌN DỊCH THEO TRỤC Y ---
 	  	            if(ch1_en) {
 	  	                tx_packet.y_offset1 += delta_y;
-	  	                if (tx_packet.y_offset1 > 200) tx_packet.y_offset1 = 200; // Khóa biên không cho vẽ lọt ra ngoài màn hình
+	  	                if (tx_packet.y_offset1 > 200) tx_packet.y_offset1 = 200;
 	  	                if (tx_packet.y_offset1 < -200) tx_packet.y_offset1 = -200;
 	  	            }
 	  	            if (ch2_en) {
@@ -311,19 +311,17 @@ int main(void)
 	  	            if(ch1_en) {
 	  	                tx_packet.x_offset1 += delta_x;
 	  	                if (tx_packet.x_offset1 > 250) tx_packet.x_offset1 = 250;
-	  	                if (tx_packet.x_offset1 < -250) tx_packet.x_offset1 = -250;
+	  	                if (tx_packet.x_offset1 < -75) tx_packet.x_offset1 = -75;
 	  	            }
 	  	            if (ch2_en) {
 	  	                tx_packet.x_offset2 += delta_x;
 	  	                if (tx_packet.x_offset2 > 250) tx_packet.x_offset2 = 250;
-	  	                if (tx_packet.x_offset2 < -250) tx_packet.x_offset2 = -250;
+	  	                if (tx_packet.x_offset2 < -75) tx_packet.x_offset2 = -75;
 	  	            }
 	  	        }
-	            last_enc2_tick = current_tick;
-	        }
-	  }
-	  last_clk2 = clk2;
-
+	  	        last_enc2_tick = current_tick;
+	  	  }
+	  	  last_clk2 = clk2;
 	  // --- 4. TÁCH DỮ LIỆU DMA, XỬ LÝ DSP VÀ TRUYỀN SPI ---
 	  // Cờ data_ready_flag được kích bởi các hàm callback ngắt của DMA khi nó điền xong Ping hoặc Pong
       if (adc1_ready == 1 && adc2_ready == 1) {
@@ -709,14 +707,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB0 PB1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PB4 PB5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5;
+  /*Configure GPIO pins : PB0 PB1 PB4 PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
