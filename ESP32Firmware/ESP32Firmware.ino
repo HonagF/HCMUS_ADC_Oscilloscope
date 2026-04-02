@@ -165,118 +165,156 @@ button.active{background:#ffcc00;color:black}
 </div>
 
 <script>
-const canvas=document.getElementById("scope");
-const ctx=canvas.getContext("2d");
+const canvas = document.getElementById("scope");
+const ctx = canvas.getContext("2d");
 
 const ADC_MAX = 4095;
 const VREF = 3.3;
 
-let waveData=[];
-let waveData2=[];
+// Dữ liệu thô từ Server
+let waveData = [];
+let waveData2 = [];
 
-let cursorMode=0;
-let t1=0.3, t2=0.7, y1=0.3, y2=0.7;
-let showCh1=true;
-let showCh2=true;
-let hold=false;
+// --- LOGIC ĐIỀU KHIỂN ĐỘC LẬP CHO WEB ---
+let vDiv1 = 1.0;   // Volt/div CH1
+let vDiv2 = 1.0;   // Volt/div CH2
+let tDiv = 100;    // us/div (mặc định)
+let ch1Offset = 0; // pixel
+let ch2Offset = 0; // pixel
+let webTimeZoom = 1.0; // Hệ số zoom trục X cục bộ trên web
 
-let vDiv1 = 1.0;
-let vDiv2 = 1.0;
-let tDiv = 100;
-let ch1Offset = 0;
-let ch2Offset = 0;
+let showCh1 = true;
+let showCh2 = true;
+let hold = false;
 
-async function sendCmd(cmd, val) {
-    try { 
-        await fetch(`/control?cmd=${cmd}&val=${val}`);
-        if(cmd === 3) {
+// --- CURSOR LOGIC ---
+let cursorMode = 0; // 0:Off, 1:Time, 2:Volt
+let t1 = 0.3, t2 = 0.7; // Tọa độ % trục X (0.0 -> 1.0)
+let y1 = 0.3, y2 = 0.7; // Tọa độ % trục Y (0.0 -> 1.0)
+let dragging = null;
+
+// Mảng các nấc giá trị chuẩn cho Oscilloscope
+const vSteps = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0];
+const tSteps = [10, 20, 50, 100, 200, 500, 1000];
+
+// Thay thế sendCmd cũ thành điều khiển nội bộ Web
+function sendCmd(type, val) {
+    switch(type) {
+        case 1: // TIME Scale
+            let tIdx = tSteps.indexOf(tDiv);
+            if(val > 0 && tIdx < tSteps.length - 1) tDiv = tSteps[tIdx + 1];
+            if(val < 0 && tIdx > 0) tDiv = tSteps[tIdx - 1];
+            // Tính toán lại hệ số zoom hiển thị dựa trên tDiv
+            webTimeZoom = tDiv / 100.0; 
+            break;
+        case 2: // VOLT CH1
+            let v1Idx = vSteps.indexOf(vDiv1);
+            if(val > 0 && v1Idx < vSteps.length - 1) vDiv1 = vSteps[v1Idx + 1];
+            if(val < 0 && v1Idx > 0) vDiv1 = vSteps[v1Idx - 1];
+            break;
+        case 8: // VOLT CH2
+            let v2Idx = vSteps.indexOf(vDiv2);
+            if(val > 0 && v2Idx < vSteps.length - 1) vDiv2 = vSteps[v2Idx + 1];
+            if(val < 0 && v2Idx > 0) vDiv2 = vSteps[v2Idx - 1];
+            break;
+        case 6: // OFFSET (Dịch chuyển sóng trên web)
+            // val > 0 thì dịch lên, val < 0 dịch xuống
+            if(showCh1) ch1Offset += (val * 10);
+            if(showCh2) ch2Offset += (val * 10);
+            break;
+        case 3: // HOLD
             hold = !hold;
-            const b = document.getElementById("holdBtn");
-            const status = document.getElementById("runstate");
-            if(hold) {
-                b.classList.add("active");
-                b.innerText = "RUN";
-                status.innerText = "HOLD";
-            } else {
-                b.classList.remove("active");
-                b.innerText = "HOLD";
-                status.innerText = "RUN";
-            }
-        }
-    } catch(e){ console.log(e); }
+            document.getElementById("holdBtn").classList.toggle("active");
+            document.getElementById("runstate").innerText = hold ? "STOP" : "RUN";
+            break;
+    }
+    updateLabels();
+}
+
+function updateLabels() {
+    document.getElementById("voltLabel").innerText = vDiv1.toFixed(1) + "V/div";
+    document.getElementById("voltLabel2").innerText = vDiv2.toFixed(1) + "V/div";
+    document.getElementById("timeLabel").innerText = "Time: " + tDiv + "us/div";
+    document.getElementById("offset1").innerText = ch1Offset;
+    document.getElementById("offset2").innerText = ch2Offset;
 }
 
 function toggleCh(ch) {
-    if(ch == 1) { 
-        showCh1 = !showCh1; 
-        document.getElementById("ch1btn").classList.toggle("active");
-        sendCmd(7, 1);
-    }
-    if(ch == 2) { 
-        showCh2 = !showCh2; 
-        document.getElementById("ch2btn").classList.toggle("active");
-        sendCmd(7, 2);
-    }
+    if(ch == 1) { showCh1 = !showCh1; document.getElementById("ch1btn").classList.toggle("active"); }
+    if(ch == 2) { showCh2 = !showCh2; document.getElementById("ch2btn").classList.toggle("active"); }
 }
 
 function toggleCursor() {
     cursorMode = (cursorMode + 1) % 3;
-    let btn = document.getElementById("cursorBtn");
-    if(cursorMode == 0) btn.classList.remove("active");
-    else btn.classList.add("active");
+    document.getElementById("cursorBtn").classList.toggle("active", cursorMode > 0);
 }
+
+// --- XỬ LÝ KÉO THẢ CURSOR BẰNG CHUỘT ---
+canvas.onmousedown = (e) => {
+    if(cursorMode == 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / canvas.width;
+    const my = (e.clientY - rect.top) / canvas.height;
+
+    if(cursorMode == 1) { // Time
+        if(Math.abs(mx - t1) < 0.05) dragging = "t1";
+        else if(Math.abs(mx - t2) < 0.05) dragging = "t2";
+    } else if(cursorMode == 2) { // Volt
+        if(Math.abs(my - y1) < 0.05) dragging = "y1";
+        else if(Math.abs(my - y2) < 0.05) dragging = "y2";
+    }
+};
+window.onmouseup = () => { dragging = null; };
+window.onmousemove = (e) => {
+    if(!dragging) return;
+    const rect = canvas.getBoundingClientRect();
+    if(dragging == "t1") t1 = (e.clientX - rect.left) / canvas.width;
+    if(dragging == "t2") t2 = (e.clientX - rect.left) / canvas.width;
+    if(dragging == "y1") y1 = (e.clientY - rect.top) / canvas.height;
+    if(dragging == "y2") y2 = (e.clientY - rect.top) / canvas.height;
+};
 
 function drawGrid() {
     ctx.strokeStyle = "#222"; 
     ctx.lineWidth = 1;
-    // Lưới dọc
     for(let i = 0; i <= 10; i++) { 
         let x = i * canvas.width / 10; 
-        ctx.beginPath(); 
-        ctx.moveTo(x, 0); 
-        ctx.lineTo(x, canvas.height); 
-        ctx.stroke(); 
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); 
     }
     for(let i = 0; i <= 8; i++) { 
         let y = i * canvas.height / 8; 
-        ctx.beginPath(); 
-        ctx.moveTo(0, y); 
-        ctx.lineTo(canvas.width, y); 
-        ctx.stroke(); 
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); 
     }
-}
-function drawVoltageAxis() {
-    ctx.fillStyle = "#ffff00"; 
-    ctx.font = "11px Segoe UI";
-    for(let i = 1; i <= 7; i++) { 
-        let y = i * canvas.height / 8; 
-        let volt = (4 - i) * vDiv1;
-        ctx.fillText(volt.toFixed(2) + "V", 5, y + 4); 
-    }
-    
-    ctx.fillStyle = "#00ffff";
-    for(let i = 1; i <= 7; i++) { 
-        let y = i * canvas.height / 8; 
-        let volt = (4 - i) * vDiv2;
-        ctx.fillText(volt.toFixed(2) + "V", canvas.width - 40, y + 4); 
-    }
+    // Trục giữa
+    ctx.strokeStyle = "#444";
+    ctx.beginPath(); ctx.moveTo(0, canvas.height/2); ctx.lineTo(canvas.width, canvas.height/2); ctx.stroke();
 }
 
-function sampleToVolt(v) { 
-    return (v / ADC_MAX) * VREF;
+function drawVoltageAxis() {
+    ctx.font = "11px Consolas";
+    ctx.fillStyle = "#ffff00"; 
+    for(let i = 0; i <= 8; i++) { 
+        let y = i * canvas.height / 8; 
+        let v = (4 - i) * vDiv1;
+        ctx.fillText(v.toFixed(1) + "V", 5, y < 15 ? 15 : y - 2); 
+    }
 }
 
 function drawWave(data, color, scale, offset) {
     if(!data || data.length == 0) return;
-
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.beginPath();
 
+    // pixelsPerVolt: 1 ô (div) trên web tương đương canvas.height / 8
+    let pixelsPerVolt = (canvas.height / 8) / scale;
+
     for(let i = 0; i < data.length; i++) {
         let x = (i / (data.length - 1)) * canvas.width;
-        let voltage = sampleToVolt(data[i]);
-        let y = canvas.height / 2 - (voltage / scale) * (canvas.height / 8) + offset;
+        let vRaw = (data[i] / 4095.0) * 3.3; // Đưa về Volt thực tế
+        
+        // Vẽ sóng quanh trục giữa (height/2)
+        let y = (canvas.height / 2) - (vRaw * pixelsPerVolt) + offset;
 
         if(i == 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -286,89 +324,52 @@ function drawWave(data, color, scale, offset) {
 
 function drawCursor() {
     if(cursorMode == 0) return;
-    
-    ctx.setLineDash([6, 6]);
-    
-    if(cursorMode >= 1) {
-        let x1 = t1 * canvas.width; 
-        let x2 = t2 * canvas.width;
-        ctx.strokeStyle = "#ffff00";
-        ctx.beginPath(); 
-        ctx.moveTo(x1, 0); 
-        ctx.lineTo(x1, canvas.height); 
-        ctx.stroke();
-        ctx.beginPath(); 
-        ctx.moveTo(x2, 0); 
-        ctx.lineTo(x2, canvas.height); 
-        ctx.stroke();
-        
-        let timeWindow = tDiv * 10;
-        let tA = t1 * timeWindow;
-        let tB = t2 * timeWindow;
-        document.getElementById("dt").innerText = Math.abs(tA - tB).toFixed(2);
-    }
-    
-    if(cursorMode >= 2) {
-        let yy1 = y1 * canvas.height; 
-        let yy2 = y2 * canvas.height;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 5]);
+
+    if(cursorMode == 1) { // TIME MEASURE
+        ctx.strokeStyle = "#ffffff";
+        [t1, t2].forEach(t => {
+            ctx.beginPath(); ctx.moveTo(t * canvas.width, 0); ctx.lineTo(t * canvas.width, canvas.height); ctx.stroke();
+        });
+        // Tính Delta T: Một khung hình ngang mặc định đại diện cho 10 ô (tDiv * 10)
+        let deltaT = Math.abs(t1 - t2) * tDiv * 10;
+        document.getElementById("dt").innerText = deltaT.toFixed(1);
+    } 
+    else if(cursorMode == 2) { // VOLT MEASURE
         ctx.strokeStyle = "#00ff00";
-        ctx.beginPath(); 
-        ctx.moveTo(0, yy1); 
-        ctx.lineTo(canvas.width, yy1); 
-        ctx.stroke();
-        ctx.beginPath(); 
-        ctx.moveTo(0, yy2); 
-        ctx.lineTo(canvas.width, yy2); 
-        ctx.stroke();
-        
-        let v1_val = ((canvas.height / 2 - yy1) / (canvas.height / 8)) * vDiv1;
-        let v2_val = ((canvas.height / 2 - yy2) / (canvas.height / 8)) * vDiv1;
-        document.getElementById("dv").innerText = Math.abs(v1_val - v2_val).toFixed(3);
+        [y1, y2].forEach(y => {
+            ctx.beginPath(); ctx.moveTo(0, y * canvas.height); ctx.lineTo(canvas.width, y * canvas.height); ctx.stroke();
+        });
+        // Tính Delta V: Dựa trên khoảng cách pixel so với tỉ lệ Volt/div
+        let deltaV = Math.abs(y1 - y2) * 8 * vDiv1; 
+        document.getElementById("dv").innerText = deltaV.toFixed(3);
     }
-    
     ctx.setLineDash([]);
 }
 
 async function fetchData() {
-    if(!hold) {
-        try {
-            let res = await fetch('/wave');
-            let data = await res.json();
-            waveData = data.ch1;
-            waveData2 = data.ch2;
-            
-            // Hiển thị dữ liệu từ STM32
-            document.getElementById("freq1").innerText = data.freq1.toFixed(1);
-            document.getElementById("freq2").innerText = data.freq2.toFixed(1);
-            document.getElementById("vpp1").innerText = data.vpp1.toFixed(2);
-            document.getElementById("vpp2").innerText = data.vpp2.toFixed(2);
-            document.getElementById("vavg1").innerText = data.vavg1.toFixed(2);
-            document.getElementById("vavg2").innerText = data.vavg2.toFixed(2);
-            document.getElementById("vrms1").innerText = data.vrms1.toFixed(2);
-            document.getElementById("vrms2").innerText = data.vrms2.toFixed(2);
-            
-            if(data.y_scale1) {
-                vDiv1 = data.y_scale1;
-                document.getElementById("voltLabel").innerHTML = `${vDiv1}V/div`;
-            }
-            if(data.y_scale2) {
-                vDiv2 = data.y_scale2;
-                document.getElementById("voltLabel2").innerHTML = `${vDiv2}V/div`;
-            }
-            if(data.y_offset1 !== undefined) {
-                document.getElementById("offset1").innerHTML = data.y_offset1;
-                ch1Offset = data.y_offset1 / 20.0;
-            }
-            if(data.y_offset2 !== undefined) {
-                document.getElementById("offset2").innerHTML = data.y_offset2;
-                ch2Offset = data.y_offset2 / 20.0;
-            }
-            if(data.x_scale1) {
-                tDiv = data.x_scale1 * 100;
-                document.getElementById("timeLabel").innerHTML = `Time:${tDiv}us/div`;
-                document.getElementById("topbar").innerHTML = `STM32 | ${vDiv1}V/div | ${vDiv2}V/div | ${tDiv}us/div | Hold:${data.hold_flag}`;
-            }
-        } catch(e) { console.log(e); }
+    if(hold) return;
+    try {
+        let res = await fetch('/wave');
+        let data = await res.json();
+        waveData = data.ch1;
+        waveData2 = data.ch2;
+        
+        // Cập nhật text đo lường từ STM32 gửi sang
+        document.getElementById("freq1").innerText = data.freq1.toFixed(1);
+        document.getElementById("freq2").innerText = data.freq2.toFixed(1);
+        document.getElementById("vpp1").innerText = data.vpp1.toFixed(2);
+        document.getElementById("vpp2").innerText = data.vpp2.toFixed(2);
+        document.getElementById("vavg1").innerText = data.vavg1.toFixed(2);
+        document.getElementById("vavg2").innerText = data.vavg2.toFixed(2);
+        document.getElementById("vrms1").innerText = data.vrms1.toFixed(2);
+        document.getElementById("vrms2").innerText = data.vrms2.toFixed(2);
+        
+        // Hiển thị trạng thái kết nối
+        document.getElementById("topbar").innerText = "CONNECTED | WEB SCALE ACTIVE";
+    } catch(e) { 
+        document.getElementById("topbar").innerText = "DISCONNECTED";
     }
 }
 
@@ -389,7 +390,6 @@ function initCanvas() {
 }
 window.onresize = initCanvas;
 initCanvas();
-
 setInterval(fetchData, 100);
 draw();
 </script>
@@ -625,6 +625,7 @@ void updateLCD() {
         int idx2_next = base_trigger2 + stm_data.x_offset2 + (int)((x + 1) * x_scale2);
 
         // --- CHỐNG MẤT SÓNG ---
+        // Ghim sóng lại ở giới hạn cuối SAMPLES_PER_CH - 1
         idx1_curr = constrain(idx1_curr, 0, SAMPLES_PER_CH - 1);
         idx1_next = constrain(idx1_next, 0, SAMPLES_PER_CH - 1);
         idx2_curr = constrain(idx2_curr, 0, SAMPLES_PER_CH - 1);

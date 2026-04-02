@@ -97,11 +97,10 @@ typedef struct __attribute__((packed)){
 
 Packet_t tx_packet; // Khởi tạo biến toàn cục chứa gói tin
 #define PACKET_SIZE sizeof(Packet_t)
-
-// Mảng đệm Ping-Pong cho ADC DMA. Kích thước = Số mẫu * 2 kênh * 2 (Ping và Pong). Tổng = 4096 phần tử.
-// Sử dụng Ping-Pong buffer giúp CPU có thể xử lý nửa mảng này trong khi phần cứng DMA đang tự động điền dữ liệu vào nửa mảng kia, đảm bảo Real-time.
+uint8_t adc_running = 1;
 volatile uint8_t adc1_ready = 0;
 volatile uint8_t adc2_ready = 0;
+volatile uint8_t is_holding = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -181,7 +180,6 @@ int main(void)
   HAL_TIM_Base_Start(&htim3);
 
   // Khởi tạo các biến quản lý trạng thái
-  uint8_t is_holding = 0;
   uint32_t last_btn_tick = 0;
   tx_packet.y_scale1 = 1.0f;
   tx_packet.y_scale2 = 1.0f;
@@ -225,9 +223,21 @@ int main(void)
 
 		  // Nút Dừng hình / Chạy tiếp (Hold)
 		  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_0) == GPIO_PIN_RESET){
-			  is_holding = !is_holding;
-			  tx_packet.hold_flag = is_holding;
-			  last_btn_tick = current_tick; // Cập nhật mốc thời gian chốt nút
+		                is_holding = !is_holding;
+		                tx_packet.hold_flag = is_holding;
+
+		                // ĐIỀU KHIỂN ADC THEO TRẠNG THÁI HOLD
+		                if (is_holding) {
+		                    HAL_ADC_Stop_DMA(&hadc1);
+		                    HAL_ADC_Stop_DMA(&hadc2);
+		                    adc_running = 0;
+		                } else {
+		                    HAL_ADC_Start_DMA(&hadc1, (uint32_t*)tx_packet.ch1, SAMPLES_PER_CH);
+		                    HAL_ADC_Start_DMA(&hadc2, (uint32_t*)tx_packet.ch2, SAMPLES_PER_CH);
+		                    adc_running = 1;
+		                }
+
+		                last_btn_tick = current_tick;
 		  }
 		  // Nút Autoset (Trả mọi thông số về default)
 		  else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) == GPIO_PIN_RESET){
@@ -255,7 +265,7 @@ int main(void)
 	  	  uint8_t clk1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
 
 	  	  // Phát hiện cạnh xuống và đảm bảo khoảng cách giữa 2 lần nhận tín hiệu tối thiểu là 50ms (chống dội)
-	  	  if (clk1 == 0 && last_clk1 == 1 && (current_tick - last_enc1_tick > 50)){
+	  	  if (clk1 == 0 && last_clk1 == 1 && (current_tick - last_enc1_tick > 20)){
 
 	  		  // Nếu chân DT khác mức logic của CLK -> Quay cùng chiều kim đồng hồ (Tăng). Ngược lại là giảm.
 	  		  float delta = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1) != clk1) ? 0.2f : -0.2f;
@@ -274,12 +284,12 @@ int main(void)
 	  			if (ch1_en) {
 	  				tx_packet.x_scale1 += delta;
 	  				if (tx_packet.x_scale1 < 0.8f) tx_packet.x_scale1 = 0.8f;
-	  				if (tx_packet.x_scale1 > 5.0f) tx_packet.x_scale1 = 5.0f;
+	  				if (tx_packet.x_scale1 > 2.5f) tx_packet.x_scale1 = 2.5f;
 	  			}
 	  			if (ch2_en) {
 	  				tx_packet.x_scale2 += delta;
 	  				if (tx_packet.x_scale2 < 0.8f) tx_packet.x_scale2 = 0.8f;
-	  				if (tx_packet.x_scale2 > 5.0f) tx_packet.x_scale2 = 5.0f;
+	  				if (tx_packet.x_scale2 > 2.5f) tx_packet.x_scale2 = 2.5f;
 	  			}
 	  		  }
 	  		  last_enc1_tick = current_tick; // Chốt thời gian lặp để block các tín hiệu nhiễu tiếp theo
@@ -289,7 +299,7 @@ int main(void)
 	  	  // ENCODER 2: Dùng để dịch chuyển vị trí sóng theo trục ngang (X) hoặc dọc (Y)
 	  	  uint8_t clk2 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4);
 
-	  	  if (clk2 == 0 && last_clk2 == 1 && (current_tick - last_enc2_tick > 50)){
+	  	  if (clk2 == 0 && last_clk2 == 1 && (current_tick - last_enc2_tick > 10)){
 
 	  	  		int delta_y = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5) != clk2) ? -10 : 10;
 	  	  		int delta_x = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5) != clk2) ? -5 : 5;
@@ -324,24 +334,26 @@ int main(void)
 	  	  last_clk2 = clk2;
 	  // --- 4. TÁCH DỮ LIỆU DMA, XỬ LÝ DSP VÀ TRUYỀN SPI ---
 	  // Cờ data_ready_flag được kích bởi các hàm callback ngắt của DMA khi nó điền xong Ping hoặc Pong
-      if (adc1_ready == 1 && adc2_ready == 1) {
+      if (adc1_ready == 1 && adc2_ready == 1 || is_holding) {
 
-    	  // BƯỚC 1: CẬP NHẬT VÀ XỬ LÝ SÓNG (Chỉ chạy khi người dùng KHÔNG bấm Hold)
+    	  // CẬP NHẬT VÀ XỬ LÝ SÓNG (Chỉ chạy khi người dùng KHÔNG bấm Hold)
     	  if (is_holding == 0) {
     	      tx_packet.trigger_idx1 = Process_Signal(tx_packet.ch1, &tx_packet.vpp1, &tx_packet.freq1, &tx_packet.vavg1, &tx_packet.vrms1, &tx_packet.vamp1);
         	  tx_packet.trigger_idx2 = Process_Signal(tx_packet.ch2, &tx_packet.vpp2, &tx_packet.freq2, &tx_packet.vavg2, &tx_packet.vrms2, &tx_packet.vamp2);
+        	  adc1_ready = 0;
+        	  adc2_ready = 0;
     	  }
 
-    	  // BƯỚC 2: XÓA CỜ NGẮT DMA (Phải thực hiện dù có bấm Hold hay không để hệ thống không bị treo)
-    	  adc1_ready = 0;
-    	  adc2_ready = 0;
+    	  // Luôn truyền SPI để Web/LCD cập nhật được trạng thái [STOP]/[RUN]
+    	  // và các lệnh Encoder Zoom/Offset vẫn có tác dụng trên hình tĩnh.
+    	  if (HAL_SPI_GetState(&hspi1) == HAL_SPI_STATE_READY) {
+    		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
+    		  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t*)&tx_packet, PACKET_SIZE);
+    	  }
 
-    	  // BƯỚC 3: BẮN GÓI TIN SANG ESP32 (Giao tiếp SPI bằng DMA)
-    	  // Lưu ý: Quá trình truyền này được đặt ngoài khối "is_holding" để ESP32 vẫn liên tục nhận được cập nhật về thao tác nút bấm, cursor, zoom ngay cả khi màn hình đang Hold.
-    	  if (HAL_SPI_GetState(&hspi1) == HAL_SPI_STATE_READY) { // Đảm bảo đường SPI đang không bận
-    	      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); // Kéo chân CS xuống LOW để chọn chip Slave (ESP32)
-    	      // Sử dụng DMA để đẩy gói tin ~2KB đi. CPU không phải chờ truyền xong.
-    	      HAL_SPI_Transmit_DMA(&hspi1, (uint8_t*)&tx_packet, PACKET_SIZE);
+    	  // Nếu đang HOLD, ta thêm một chút delay nhỏ để vòng lặp không chạy quá nhanh gây nghẽn SPI
+    	  if (is_holding) {
+    		  HAL_Delay(50);
     	  }
       }
   }
@@ -688,8 +700,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC0 PC1 PC2 PC5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_5;
+  /*Configure GPIO pins : PC0 PC1 PC2 PC4
+                           PC5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_4
+                          |GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
@@ -700,12 +714,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PC4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB1 PB4 PB5 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5;
@@ -733,11 +741,10 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
     if(hspi->Instance == SPI1) {
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);// Kéo chân CS lên mức CAO để chốt quá trình truyền và giải phóng bus
-
-	    tx_packet.reset_flag = 0;
-
-        HAL_ADC_Start_DMA(&hadc1, (uint32_t*)tx_packet.ch1, SAMPLES_PER_CH);
-        HAL_ADC_Start_DMA(&hadc2, (uint32_t*)tx_packet.ch2, SAMPLES_PER_CH);
+        if (is_holding == 0){
+        	HAL_ADC_Start_DMA(&hadc1, (uint32_t*)tx_packet.ch1, SAMPLES_PER_CH);
+        	HAL_ADC_Start_DMA(&hadc2, (uint32_t*)tx_packet.ch2, SAMPLES_PER_CH);
+        }
     }
 }
 
