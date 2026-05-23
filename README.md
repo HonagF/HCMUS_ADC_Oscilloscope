@@ -1,5 +1,10 @@
 [Project Information](https://docs.google.com/document/d/1wfRh9YXK25s_UUH2y_-TGw_fSxXpMR-pIrb6TqXOmT0/edit?tab=t.250vvrg7rc1h)
- ## Hardware
+
+
+https://github.com/user-attachments/assets/9503c086-c768-495d-8c4e-90152d3b3db1
+
+
+ ## I. Hardware
 
 | Component | Model | Quantity |
 |---|---|---|
@@ -13,7 +18,6 @@
 | Signal conditioning | Custom signal adjustment circuit | 2 |
 | Power | 7.4V power supply → 8.4V boosted | 1 |
 
----
 <p align="center">
   <img src="https://github.com/user-attachments/assets/1656fa71-f535-4f75-9b79-cdda9fc12dd3" alt="NUCLEO-F303RE Board" width="25%"/>
 </p>
@@ -24,14 +28,17 @@
 <img src="https://github.com/user-attachments/assets/4c54a986-af12-4d0c-8bfb-2371441a5be4" width="80%"/>
 </p>
 
----
-
 Although we designed this circuit, when we built it on a perfboard, it worked initially but broke down a few days later. Due to time constraints, we had to abandon it. We hope you will carry on this work in our place.
 <p align="center">
 <img width="549" height="266" alt="image" src="https://github.com/user-attachments/assets/175a57ee-710c-4d1e-96d9-d2e2e369a887" alt="Signal_adjustment_circuit" width="150%"/>
 </p>
 
 ---
+ ## II. Software
+For the software, besides the signal processing algorithm on the STM32F303RE, we designed an interface on a 3.5-inch TFT SPI display using the ILI9488. Due to local stock limitations, a touchscreen version was provisionally used instead of the standard non-touch model. (Users could also opt for more common alternatives like the 2.8-inch ILI9341 to fit their needs)
+<p align="center">
+<img width="1014" height="349" alt="image" src="https://github.com/user-attachments/assets/229210b9-efe4-4bc7-a90d-ae7fef2adf83" />
+</p>
 
 Additionally, we have developed an interface on the ESP32, along with other features, making it open-source for further development.
 <p align="center">
