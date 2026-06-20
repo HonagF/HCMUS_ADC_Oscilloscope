@@ -3,8 +3,29 @@
 
 https://github.com/user-attachments/assets/9503c086-c768-495d-8c4e-90152d3b3db1
 
+ ## I. Introduction
+### Project Overview
+This repository hosts a self-developed **Digital Storage Oscilloscope (DSO)** project. It was built as a core team assignment for the Microcontrollers course within the Faculty of Electronics and Telecommunications at the VNU-HCM University of Science (Academic Year 2025-2026).
 
- ## I. Hardware
+The architecture utilizes a distributed processing layout across a hybrid multi-microcontroller setup to ensure smooth, high-speed performance:
+* **Data Acquisition Block (STM32F303RE):** Handles high-speed analog signal sampling through its internal 12-bit ADC, utilizing DMA to offload data storage from the CPU pipeline.
+* **Processing & Display Block (ESP32):** Manages incoming data packets over SPI, executes processing tasks, hosts the web interface, and handles graphical UI rendering.
+* **Human-Machine Interface (HMI):** Displays waveforms smoothly on a 3.5-inch TFT touch screen powered by the ILI9488 controller (320x480 pixel resolution).
+
+The system combines concepts from Basic Electronics, Digital Electronics, Analog Electronics, and Microcontrollers to deliver a functional measurement tool tailored for educational settings and fundamental laboratory testing.
+
+---
+
+Our **DualCore Scope** team:
+
+| Name | Roles & Responsibilities |
+| :--- | :--- |
+| [**Vũ Quốc Hùng**](https://github.com/HungVulkan) | <ul><li>Team Leader</li><li>Hardware Development</li><li>GitHub Management</li></ul> |
+| [**Nguyễn Minh Hoàng**](https://github.com/HonagF) | <ul><li>Firmware (STM32, ESP32)</li><li>System Functions & UI Display</li><li>GitHub Management</li></ul> |
+| **Đặng Hữu Trung Kiên** | <ul><li>3D design</li><li>Slide Preparation</li></ul> |
+| **Đỗ Hoàng Đạt** | <ul><li>Firmware (ESP32), web interface</li><li>Hardware Assistance</li></ul> |
+
+ ## II. Hardware
 
 | Component | Model | Quantity |
 |---|---|---|
@@ -34,7 +55,7 @@ Although we designed this circuit, when we built it on a perfboard, it worked in
 </p>
 
 ---
- ## II. Software
+ ## III. Software
 For the software, besides the signal processing algorithm on the STM32F303RE, we designed an interface on a 3.5-inch TFT SPI display using the ILI9488. Due to local stock limitations, a touchscreen version was provisionally used instead of the standard non-touch model. (Users could also opt for more common alternatives like the 2.8-inch ILI9341 to fit their needs)
 <p align="center">
 <img width="1014" height="349" alt="image" src="https://github.com/user-attachments/assets/229210b9-efe4-4bc7-a90d-ae7fef2adf83" />
