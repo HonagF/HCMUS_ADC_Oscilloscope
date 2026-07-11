@@ -9,5 +9,5 @@
 ../Core/Src/main.c:681:13:MX_GPIO_Init	1
 ../Core/Src/main.c:731:6:HAL_ADC_ConvCpltCallback	3
 ../Core/Src/main.c:741:6:HAL_SPI_TxCpltCallback	3
-../Core/Src/main.c:752:10:Process_Signal	18
+../Core/Src/main.c:752:10:Process_Signal	19
 ../Core/Src/main.c:839:6:Error_Handler	1

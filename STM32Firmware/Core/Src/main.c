@@ -754,8 +754,8 @@ uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg
     uint32_t sum = 0;
     uint64_t sum_sq = 0;
 
-    // 1. Quét mảng để tìm Max, Min, cộng dồn tổng và tổng bình phương
-    for(int i=0; i<SAMPLES_PER_CH; i++){
+    // 1. Quét mảng tìm Max, Min và Cộng dồn
+    for(int i = 0; i < SAMPLES_PER_CH; i++) {
         uint16_t val = raw_data[i];
         if(val > max) max = val;
         if(val < min) min = val;
@@ -763,72 +763,72 @@ uint16_t Process_Signal(uint16_t* raw_data, float* vpp, float* freq, float* vavg
         sum_sq += (uint64_t)val * val;
     }
 
-    // 2. Chuyển đổi dữ liệu thô (0-4095) sang Volt
-    float adc_to_volt = 3.3f/4095.0f;
+    float adc_to_volt = 3.3f / 4095.0f;
 
+    // 2. Tính toán Điện áp (Bỏ phép nhân 2 vì ông cắm thẳng máy FNIRSI 0-3V)
     *vpp = (float)(max - min) * adc_to_volt;
     *vamp = *vpp / 2.0f;
+
     float avg_raw = (float)sum / SAMPLES_PER_CH;
     *vavg = avg_raw * adc_to_volt;
     *vrms = sqrtf((float)sum_sq / SAMPLES_PER_CH) * adc_to_volt;
 
-    // 3. TÍNH TẦN SỐ (Bằng State Machine quét từ đầu mảng)
-        int16_t trigger_level = (max + min) / 2;
-        // Độ trễ 5% Vpp. Chống nhiễu nhưng không làm mất sóng.
-        int16_t hysteresis = (max - min) * 5 / 100;
-        if (hysteresis < 15) hysteresis = 15;
-        if (hysteresis > 100) hysteresis = 100;
+    // ---------------------------------------------------------
+    // 3. THUẬT TOÁN ĐO TẦN SỐ (ĐÃ NÂNG CẤP CHỐNG NHIỄU GAI)
+    // Dùng trung bình cộng làm Trigger Level thay vì Max/Min
+    int16_t trigger_level = (int16_t)avg_raw;
 
-        int first_cross_freq = -1;
-        int last_cross_freq = -1;
-        int period_count = 0;
+    // Siết chặt độ trễ (Hysteresis) ở khoảng 10-40 đơn vị để nhạy bén hơn
+    int16_t hysteresis = (max - min) * 2 / 100;
+    if (hysteresis < 10) hysteresis = 10;
+    if (hysteresis > 40) hysteresis = 40;
 
-        // Khởi tạo trạng thái ban đầu cho máy đếm tần số
-        uint8_t is_low = (raw_data[0] < trigger_level) ? 1 : 0;
+    int first_cross_freq = -1;
+    int last_cross_freq = -1;
+    int period_count = 0;
 
-        for(int i = 0; i < SAMPLES_PER_CH; i++) {
-            // Nếu sóng vượt vạch trên -> Ghi nhận sườn lên
-            if(is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
-                if (first_cross_freq == -1) {
-                    first_cross_freq = i;
-                } else {
-                    last_cross_freq = i;
-                    period_count++;
-                }
-                is_low = 0; // Khóa lại, chờ sóng xuống
+    uint8_t is_low = (raw_data[0] < trigger_level) ? 1 : 0;
+    for(int i = 0; i < SAMPLES_PER_CH; i++) {
+        if(is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
+            if (first_cross_freq == -1) {
+                first_cross_freq = i; // Ghi nhận lần cắt đầu tiên
+            } else {
+                last_cross_freq = i;  // Cập nhật lần cắt cuối cùng
+                period_count++;
             }
-            // Nếu sóng rớt xuống vạch dưới -> Mở khóa chờ sườn lên tiếp theo
-            else if(is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
-                is_low = 1;
-            }
+            is_low = 0;
         }
-
-        // 4. TÍNH TOÁN TẦN SỐ
-        if(period_count > 0) {
-            *freq = (100000.0f * period_count) / (float)(last_cross_freq - first_cross_freq);
-        } else {
-            *freq = 0;
+        else if(is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
+            is_low = 1;
         }
+    }
 
+    // Tính tần số an toàn, chống lỗi chia cho 0
+    if(period_count > 0 && last_cross_freq > first_cross_freq) {
+        *freq = (100000.0f * period_count) / (float)(last_cross_freq - first_cross_freq);
+    } else {
+        *freq = 0;
+    }
 
-        // 5. TÌM ĐIỂM NEO VẼ SÓNG (TRIGGER) CŨNG BẰNG STATE MACHINE
-        int display_trigger = 50; // Mặc định ở mẫu 400 để dành chỗ cho dịch trục X
+    // ---------------------------------------------------------
+    // 4. TÌM ĐIỂM NEO VẼ SÓNG (TRIGGER CHO ESP32)
+    uint16_t display_trigger = 50;
+    uint8_t trig_is_low = (raw_data[50] < trigger_level) ? 1 : 0;
 
-        // Đánh giá trạng thái sóng ngay tại vị trí 400
-        uint8_t trig_is_low = (raw_data[50] < trigger_level) ? 1 : 0;
+    // Chỉ quét đến (1024 - 400) để đảm bảo ESP32 luôn có đủ 400 điểm ảnh để vẽ, không bị rác màn hình
+    int max_trigger_index = SAMPLES_PER_CH - 400;
 
-        for(int i = 50; i < SAMPLES_PER_CH; i++) {
-            // Chỉ cần sóng trườn qua vạch trên là chốt điểm neo, bất kể dốc thoai thoải cỡ nào
-            if(trig_is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
-                display_trigger = i; // Đã tìm thấy điểm Trigger!
-                break;               // Cắt vòng lặp ngay, lấy điểm đầu tiên làm mốc
-            }
-            else if(trig_is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
-                trig_is_low = 1;     // Sóng xuống thấp, mở khóa chờ cắt lên
-            }
+    for(int i = 50; i < max_trigger_index; i++) {
+        if(trig_is_low == 1 && raw_data[i] > (trigger_level + hysteresis)) {
+            display_trigger = i; // Chốt điểm Trigger!
+            break;
         }
+        else if(trig_is_low == 0 && raw_data[i] < (trigger_level - hysteresis)) {
+            trig_is_low = 1;
+        }
+    }
 
-        return (uint16_t)display_trigger;
+    return display_trigger;
 }
 /* USER CODE END 4 */
 

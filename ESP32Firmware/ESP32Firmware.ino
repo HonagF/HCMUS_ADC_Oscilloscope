@@ -59,7 +59,9 @@ typedef struct __attribute__((packed)) {
 } Command_t;
 Packet_t stm_data; 
 Command_t cmd_to_send;
-bool has_new_cmd = false;
+volatile bool has_new_cmd = false;
+
+portMUX_TYPE dataMutex = portMUX_INITIALIZER_UNLOCKED;
 
 #define PACKET_SIZE sizeof(Packet_t)
 WORD_ALIGNED_ATTR uint8_t rx_buf[PACKET_SIZE + 20];
@@ -491,8 +493,13 @@ void handleWave() {
         server.send(503, "text/plain", "No data from STM32");
         return;
     }
+
+    Packet_t local_data;
+    portENTER_CRITICAL(&dataMutex);
+    memcpy(&local_data, &stm_data, PACKET_SIZE);
+    portEXIT_CRITICAL(&dataMutex);
     
-    DynamicJsonDocument doc(30000);
+    DynamicJsonDocument doc(16384);
     
     JsonArray ch1 = doc.createNestedArray("ch1");
     JsonArray ch2 = doc.createNestedArray("ch2");
@@ -772,8 +779,14 @@ void setup() {
     Serial.println("Web server started\n");
     // 6.4. Đẩy WebServer sang chạy ở Core 0
     xTaskCreatePinnedToCore(
-        webTaskCode, "WebTask", 40000, NULL, 1, &WebTask, 0
-    );
+    webTaskCode,   // Con trỏ hàm thực thi luồng
+    "WebTask",     // Tên luồng (dùng cho debug)
+    40000,         // Dung lượng bộ nhớ Stack được cấp phát (Word)
+    NULL,          // Tham số truyền vào hàm (Không có)
+    1,             // Mức độ ưu tiên của luồng (Priority)
+    &WebTask,      // Con trỏ quản lý luồng (Task Handle)
+    0              // Lõi thực thi (Core 0)
+);
 }
 
 // ==========================================
@@ -809,7 +822,9 @@ void loop() {
         
         if (offset != -1) {
             // Lấy dữ liệu
+            portENTER_CRITICAL(&dataMutex);
             memcpy(&stm_data, &rx_buf[offset], PACKET_SIZE);
+            portEXIT_CRITICAL(&dataMutex);
             
             // Kiểm tra Footer để đảm bảo nguyên vẹn
             if (stm_data.footer[0] == 0xCC && stm_data.footer[1] == 0xDD) {
